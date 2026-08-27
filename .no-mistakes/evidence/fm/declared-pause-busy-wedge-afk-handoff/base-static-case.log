@@ -1,0 +1,2 @@
+=== test_afk_busy_declared_pause_hands_off_plain_stale
+not ok - the away-mode busy-turn bound did not hand off the plain window identity: stale: test:fm-afk-review-scout (idle 1s, possible wedge, escalation 1)

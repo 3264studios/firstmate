@@ -1,0 +1,19 @@
+=== test_afk_busy_declared_pause_hands_off_plain_stale
+ok - away mode hands a busy declared pause to the daemon as a plain stale, and lifting the declaration restores the wedge escalation
+=== test_afk_busy_declared_pause_ticking_pane_hands_off_once
+ok - away mode wakes the daemon once per declaration for a busy pane whose footer ticks on every capture
+=== test_busy_declared_pause_is_rechecked_not_wedge_escalated
+ok - a busy pane under a declared pause is rechecked on the long cadence, and lifting the pause restores the wedge escalation
+=== test_afk_paused_changed_pane_hands_off_plain_stale
+ok - AFK changed paused panes hand off plain stale identities for daemon-owned pause triage
+=== test_afk_present_reverts_watcher_to_one_shot
+ok - with .afk present the watcher reverts to one-shot so the daemon owns triage (no double-triage)
+=== test_busy_pane_changing_hash_escalates_past_turn_age_bound
+ok - a busy worker whose pane hash changes every poll still escalates once its completed-turn age reaches the bound
+=== test_busy_pane_stable_hash_escalates_past_turn_age_bound
+ok - a busy worker with a stable pane hash still escalates once its completed-turn age reaches the bound
+=== test_secondmate_captain_held_resurfaces_in_normal_mode
+ok - a captain-held secondmate re-surfaces on the bounded normal-mode cadence
+=== test_nonterminal_stale_paused_absorbed_then_resurfaced
+ok - a declared pause is absorbed on first sight, then re-surfaced as a recheck past the threshold, never wedge-escalated
+=== all targeted cases passed

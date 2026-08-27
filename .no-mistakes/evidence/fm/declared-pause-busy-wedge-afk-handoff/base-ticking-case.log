@@ -1,0 +1,2 @@
+=== test_afk_busy_declared_pause_ticking_pane_hands_off_once
+not ok - the away-mode busy-turn bound did not hand off the plain window identity for a ticking pane: stale: test:fm-afk-ticking-scout (idle 501s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)

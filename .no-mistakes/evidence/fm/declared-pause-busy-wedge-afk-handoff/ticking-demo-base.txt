@@ -1,0 +1,27 @@
+## base-60bedde: watcher = /tmp/fm-afk-busy-test.iQQ0ze/base/bin/fm-watch.sh
+## fixture: afk active, pi harness busy, status='paused: hosting the Lavish review, awaiting captain feedback', footer ticks every capture
+round 1 (first launch): captures 0->1, pane hash - -> aebccbdb14dd | silent (watcher still polling after a full cycle)
+   watcher stdout: <empty>
+   .stale-demo_fm-afk-ticking-scout = <absent>
+   wedge timer: present | escalations: none | normal-mode .paused marker: absent
+round 2 (re-arm): captures 1->2, pane hash aebccbdb14dd -> 1ebcf2477027 | WAKE -> watcher exited
+   watcher stdout: stale: demo:fm-afk-ticking-scout (idle 3s, possible wedge, escalation 1)
+   .stale-demo_fm-afk-ticking-scout = <absent>
+   wedge timer: absent | escalations: 1 | normal-mode .paused marker: absent
+round 3 (re-arm): captures 2->3, pane hash 1ebcf2477027 -> 17524d6eeacc | silent (watcher still polling after a full cycle)
+   watcher stdout: <empty>
+   .stale-demo_fm-afk-ticking-scout = <absent>
+   wedge timer: present | escalations: 1 | normal-mode .paused marker: absent
+round 4 (re-arm): captures 3->4, pane hash 17524d6eeacc -> 0893b03cb830 | WAKE -> watcher exited
+   watcher stdout: stale: demo:fm-afk-ticking-scout (idle 2s, possible wedge, escalation 2)
+   .stale-demo_fm-afk-ticking-scout = <absent>
+   wedge timer: absent | escalations: 2 | normal-mode .paused marker: absent
+round 5 (re-arm): captures 4->5, pane hash 0893b03cb830 -> 65da6f2775e9 | silent (watcher still polling after a full cycle)
+   watcher stdout: <empty>
+   .stale-demo_fm-afk-ticking-scout = <absent>
+   wedge timer: present | escalations: 2 | normal-mode .paused marker: absent
+round 6 (re-arm): captures 5->6, pane hash 65da6f2775e9 -> a5a0491b1681 | WAKE -> watcher exited
+   watcher stdout: stale: demo:fm-afk-ticking-scout (idle 3s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+   .stale-demo_fm-afk-ticking-scout = <absent>
+   wedge timer: absent | escalations: 3 | normal-mode .paused marker: absent
+## base-60bedde result: 3 wake(s) across 6 watcher launches (1 launch + 5 re-arms)

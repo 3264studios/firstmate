@@ -1,0 +1,2 @@
+=== test_afk_busy_declared_pause_ticking_pane_hands_off_once
+not ok - the away-mode handoff left the undeclared phase's wedge timer in place

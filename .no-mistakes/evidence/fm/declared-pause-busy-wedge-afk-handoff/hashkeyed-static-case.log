@@ -1,0 +1,3 @@
+=== test_afk_busy_declared_pause_hands_off_plain_stale
+ok - away mode hands a busy declared pause to the daemon as a plain stale, and lifting the declaration restores the wedge escalation
+=== all targeted cases passed
