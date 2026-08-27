@@ -1,0 +1,26 @@
+# Before/after: the NEW tests/fm-daemon.test.sh (from f08d273) run against the UNCHANGED daemon (base 524994c) and the CHANGED daemon (target f08d273).
+# Trees were extracted with 'git archive' into /tmp; only bin/fm-supervise-daemon.sh differs for these tests, the test file is byte-identical.
+
+=== tree=base (pristine 524994c daemon + new test file) ===
+test_housekeeping_busy_declared_wait_matures_its_window        exit=1
+    not ok - paused busy declared wait produced 0 escalations past its window, expected exactly one
+test_enriched_wedge_under_declared_wait_uses_pause_cadence     exit=1
+    not ok - a declared wait escalated inside one PAUSE_RESURFACE_SECS window: sess:fm-paused-wedge-w1 (idle 250s, possible wedge, escalation 2)
+    sess:fm-paused-wedge-w1 (idle 250s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+    sess:fm-paused-wedge-w1 (idle 250s, possible wedge, escalation 4, demand-deep-inspection: same pane has wedge-escalated 4 times in a row - do not re-absorb on the run-step/pane state alone)
+    sess:fm-paused-wedge-w1 (idle 250s, possible wedge, escalation 5, demand-deep-inspection: same pane has wedge-escalated 5 times in a row - do not re-absorb on the run-step/pane state alone)
+test_stale_diagnostic_wedge_survives_busy_housekeeping         exit=1
+    not ok - paused enriched wedge escalated instead of routing to the pause cadence: sess:fm-suffix-paused (idle 500s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+test_housekeeping_paused_resumed_cleared                       exit=0
+    ok - a busy pane cannot gate the pause clear once its crew's status no longer declares the wait
+
+=== tree=target (f08d273 daemon + same test file) ===
+test_housekeeping_busy_declared_wait_matures_its_window        exit=0
+    ok - housekeeping matures a busy pane's declared-wait window into exactly one recheck per window
+test_enriched_wedge_under_declared_wait_uses_pause_cadence     exit=0
+    ok - an enriched wedge under a declared wait uses the pause cadence and restores wedge detection on resume
+test_stale_diagnostic_wedge_survives_busy_housekeeping         exit=0
+    ok - enriched stale wedges bypass status absorption except under a declared wait, without disturbing busy workers
+test_housekeeping_paused_resumed_cleared                       exit=0
+    ok - a busy pane cannot gate the pause clear once its crew's status no longer declares the wait
+

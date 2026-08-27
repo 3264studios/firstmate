@@ -1,0 +1,67 @@
+### tree: /tmp/fm3149-test/target
+### scenario: wedge   run: 30s   FM_PAUSE_RESURFACE_SECS=4 FM_HOUSEKEEPING_TICK=1 FM_POLL=1 FM_CREW_STATE_BIN=/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T//fm3149-e2e-wedge.AXFEzX/e2e-wedge/fakebin/fm-crew-state-stub FM_STALE_ESCALATE_SECS=3
+### crew status log (state/audit-w7.status, latest line is the declaration):
+    working: dispatching the long audit
+    paused: the audit engine is running to completion
+### daemon startup/stderr:
+    WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+    WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+    WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+    WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+
+### what reached the captain's pane (fake tmux sent.log: each typed digest line, then [ENTER]):
+    ⁣FIRSTMATE_OP: v1 away-supervisor: Supervisor escalate (       6 event(s)): paused 4s (awaiting external, recheck whether the wait still holds): sess:fm-audit-w7 | paused 4s (awaiting external, recheck whether the wait still holds): sess:fm-audit-w7 | paused 5s (awaiting external, recheck whether the wait still holds): sess:fm-audit-w7 | paused 6s (awaiting external, recheck whether the wait still holds): sess:fm-audit-w7 | paused 6s (awaiting external, recheck whether the wait still holds): sess:fm-audit-w7 | paused 4s (awaiting external, recheck whether the wait still holds): sess:fm-audit-w7 (pre-read; re-arm not needed — watcher daemon-managed)
+    [ENTER]
+
+### counts over 30s:
+    digests submitted to the captain ([ENTER] count):            1
+    declared-wait rechecks delivered ("awaiting external"):     6
+    possible-wedge escalations delivered:                       0
+    of which demand-deep-inspection:                            0
+    daemon log: enriched wedge wakes received from the watcher:  4
+    daemon log: of those escalated as wedges:                    0
+    daemon log: of those self-handled as a declared pause:      4
+
+### daemon log (state/.supervise-daemon.log):
+    [2026-08-26T23:50:47-0400] daemon starting (pid 59761); target=super:0; target_source=FM_SUPERVISOR_TARGET; backend=tmux; backend_source=FM_SUPERVISOR_BACKEND; afk=off; inject_skip='heartbeat'; stale_escalate=3s; batch=0s
+    [2026-08-26T23:50:53-0400] inject deferred: afk inactive
+    [2026-08-26T23:50:54-0400] inject deferred: afk inactive
+    [2026-08-26T23:50:55-0400] inject deferred: afk inactive
+    [2026-08-26T23:50:57-0400] inject deferred: afk inactive
+    [2026-08-26T23:50:58-0400] inject deferred: afk inactive
+    [2026-08-26T23:50:58-0400] wake: stale: sess:fm-audit-w7 (idle 3s, possible wedge, escalation 1)
+    [2026-08-26T23:50:59-0400] self-handle (paused): stale: sess:fm-audit-w7 (idle 3s, possible wedge, escalation 1) -> paused (awaiting external), rechecked on a long cadence: paused: the audit engine is running to completion
+    [2026-08-26T23:51:00-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:02-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:03-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:04-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:04-0400] wake: stale: sess:fm-audit-w7 (idle 4s, possible wedge, escalation 2)
+    [2026-08-26T23:51:05-0400] self-handle (paused): stale: sess:fm-audit-w7 (idle 4s, possible wedge, escalation 2) -> paused (awaiting external), rechecked on a long cadence: paused: the audit engine is running to completion
+    [2026-08-26T23:51:07-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:08-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:09-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:11-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:11-0400] wake: stale: sess:fm-audit-w7 (idle 4s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+    [2026-08-26T23:51:11-0400] self-handle (paused): stale: sess:fm-audit-w7 (idle 4s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone) -> paused (awaiting external), rechecked on a long cadence: paused: the audit engine is running to completion
+    [2026-08-26T23:51:13-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:14-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:16-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:17-0400] inject deferred: afk inactive
+    [2026-08-26T23:51:17-0400] wake: stale: sess:fm-audit-w7 (idle 3s, possible wedge, escalation 4, demand-deep-inspection: same pane has wedge-escalated 4 times in a row - do not re-absorb on the run-step/pane state alone)
+    [2026-08-26T23:51:18-0400] self-handle (paused): stale: sess:fm-audit-w7 (idle 3s, possible wedge, escalation 4, demand-deep-inspection: same pane has wedge-escalated 4 times in a row - do not re-absorb on the run-step/pane state alone) -> paused (awaiting external), rechecked on a long cadence: paused: the audit engine is running to completion
+    [2026-08-26T23:51:22-0400] daemon shutting down
+
+### watcher triage log (state/.watch-triage.log, if any):
+    [2026-08-26T23:50:50-0400] absorbed benign signal: /var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T//fm3149-e2e-wedge.AXFEzX/e2e-wedge/state/audit-w7.status
+    [2026-08-26T23:50:54-0400] absorbed non-terminal stale (provably working): sess:fm-audit-w7
+    [2026-08-26T23:50:56-0400] absorbed non-terminal stale (provably working): sess:fm-audit-w7
+    [2026-08-26T23:51:00-0400] absorbed non-terminal stale (provably working after a declared pause) timer reset: sess:fm-audit-w7
+    [2026-08-26T23:51:00-0400] absorbed non-terminal stale (provably working): sess:fm-audit-w7
+    [2026-08-26T23:51:02-0400] absorbed non-terminal stale (provably working): sess:fm-audit-w7
+    [2026-08-26T23:51:06-0400] absorbed non-terminal stale (provably working after a declared pause) timer reset: sess:fm-audit-w7
+    [2026-08-26T23:51:07-0400] absorbed non-terminal stale (provably working): sess:fm-audit-w7
+    [2026-08-26T23:51:08-0400] absorbed non-terminal stale (provably working): sess:fm-audit-w7
+    [2026-08-26T23:51:13-0400] absorbed non-terminal stale (provably working after a declared pause) timer reset: sess:fm-audit-w7
+    [2026-08-26T23:51:13-0400] absorbed non-terminal stale (provably working): sess:fm-audit-w7
+    [2026-08-26T23:51:14-0400] absorbed non-terminal stale (provably working): sess:fm-audit-w7
+### watcher stderr:

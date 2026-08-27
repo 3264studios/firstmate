@@ -1,0 +1,31 @@
+### tree: /tmp/fm3149-test/base
+### scenario: busy   run: 30s   FM_PAUSE_RESURFACE_SECS=4 FM_HOUSEKEEPING_TICK=1 FM_POLL=1 FM_BUSY_TURN_MAX_SECS=0 FM_STALE_ESCALATE_SECS=999999
+### crew status log (state/audit-w7.status, latest line is the declaration):
+    working: dispatching the long audit
+    paused: the audit engine is running to completion
+### daemon startup/stderr:
+    WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+    WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+
+### what reached the captain's pane (fake tmux sent.log: each typed digest line, then [ENTER]):
+    (nothing was submitted to the captain's pane)
+
+### counts over 30s:
+    digests submitted to the captain ([ENTER] count):            0
+    declared-wait rechecks delivered ("awaiting external"):     0
+    possible-wedge escalations delivered:                       0
+    of which demand-deep-inspection:                            0
+    daemon log: enriched wedge wakes received from the watcher:  0
+    daemon log: of those escalated as wedges:                    0
+    daemon log: of those self-handled as a declared pause:      0
+
+### daemon log (state/.supervise-daemon.log):
+    [2026-08-26T23:50:47-0400] daemon starting (pid 59929); target=super:0; target_source=FM_SUPERVISOR_TARGET; backend=tmux; backend_source=FM_SUPERVISOR_BACKEND; afk=on; inject_skip='heartbeat'; stale_escalate=999999s; batch=0s
+    [2026-08-26T23:50:52-0400] wake: signal: /var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T//fm3149-e2e-busy.EEhuP1/e2e-busy/state/audit-w7.status
+    [2026-08-26T23:50:52-0400] self-handle: signal: /var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T//fm3149-e2e-busy.EEhuP1/e2e-busy/state/audit-w7.status -> routine signal: audit-w7.status: paused: the audit engine is running to completion
+    [2026-08-26T23:50:54-0400] wake: stale: sess:fm-audit-w7
+    [2026-08-26T23:50:54-0400] self-handle (paused): stale: sess:fm-audit-w7 -> paused (awaiting external), rechecked on a long cadence: paused: the audit engine is running to completion
+    [2026-08-26T23:51:18-0400] daemon shutting down
+
+### watcher triage log (state/.watch-triage.log, if any):
+### watcher stderr:
