@@ -1,0 +1,21 @@
+ANSI-C Unicode escape bytes under Bash 3.2 (expected literal backslash-u bytes):
+           5c  75  32  35  38  30                                        
+
+ANSI-C Unicode escape bytes under Bash 5.3 (expected UTF-8 U+2580 bytes):
+           e2  96  80                                                    
+
+
+Bash 3.2 unguarded empty-array loop:
+/bin/bash: values[@]: unbound variable
+Exit: 127
+Bash 3.2 guarded empty-array loop:
+reached
+Exit: 0
+Bash 5.3 unguarded empty-array loop:
+reached
+Exit: 0
+
+Base seed script parse check under Bash 3.2:
+Exit: 0 (parses cleanly despite the reproduced runtime failure)
+Target seed script parse check under Bash 3.2:
+Exit: 0
