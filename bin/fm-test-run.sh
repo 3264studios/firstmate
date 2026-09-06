@@ -220,8 +220,7 @@ refuse_primary_checkout_for_task() {
     && common_dir=$(cd "$common_dir" 2>/dev/null && pwd -P) || common_dir=
   [ -n "$git_dir" ] && [ -n "$common_dir" ] || return 0
   [ "$git_dir" = "$common_dir" ] || return 0
-  top=$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null) \
-    && top=$(cd "$top" 2>/dev/null && pwd -P) || top=$ROOT
+  top=$(cd "$ROOT" && pwd -P)
   die "refusing to run in the repository primary checkout $top while FM_TASK_ID=$task_id is set; run from the assigned task worktree instead"
 }
 
