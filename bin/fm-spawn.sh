@@ -3796,6 +3796,14 @@ spawn_record_traceparent() {
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
 spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+# Mark the pane as a task worker so bin/fm-test-run.sh can refuse to run the
+# suite in the repository's primary checkout. Ship and scout workers are the
+# ones assigned an isolated worktree; a secondmate runs its own home instead.
+# The id reached a validated bare-slug charset above, so it carries no shell
+# syntax of its own.
+if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
+  spawn_send_text_line "$T" "export FM_TASK_ID=$ID"
+fi
 # Send through the exact channel that already ships GOTMPDIR, so every backend
 # and harness - ship, scout, and secondmate - gets it before launch. Skipped
 # entirely when trace context is off.
@@ -3819,6 +3827,7 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     TMPDIR TMP TEMP GOTMPDIR TMUX TMUX_PANE HERDR_ENV HERDR_SESSION HERDR_SOCKET_PATH \
     HERDR_PANE_ID CMUX_WORKSPACE_ID CMUX_SURFACE_ID CMUX_TAB_ID CMUX_PANEL_ID \
     CMUX_SOCKET_PATH ZELLIJ ZELLIJ_SESSION_NAME ZELLIJ_PANE_ID FM_ZELLIJ_SESSION \
+    FM_TASK_ID \
     $LAUNCH_ENV_NAMES; do
     # Only validated names enter shell syntax. Values expand once, quoted, in
     # the pane shell and never become source text or spawn-process snapshots.
