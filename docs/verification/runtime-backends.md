@@ -1457,7 +1457,7 @@ Those absolute figures are specific to this host and Pi version; the guards asse
 
 ## Native Codex through Pi
 
-Verified on 2026-09-08 with Pi 0.85.1 and the installed `pi-codex-native` adapter.
+Verified on 2026-09-08 with Pi 0.85.1 and the installed `pi-codex-native` 0.2.1 adapter.
 Run this token-free guard after updating Pi, Codex, or the adapter:
 
 ```sh

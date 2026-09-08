@@ -29,6 +29,14 @@ const root = process.env.FM_NATIVE_TEST_ROOT;
 const nativePackage =
   process.env.PI_CODEX_NATIVE_PACKAGE ||
   path.join(homedir(), ".pi/agent/packages/pi-codex-native");
+const piVersion = execFileSync(process.env.FM_PI_BIN || "pi", ["--version"], {
+  encoding: "utf8", timeout: 10000,
+}).trim();
+let adapterVersion = "unknown";
+try {
+  adapterVersion = JSON.parse(fs.readFileSync(path.join(nativePackage, "package.json"), "utf8")).version || "unknown";
+} catch { /* A source-only adapter may omit package metadata. */ }
+console.log(`Native Codex guard: Pi ${piVersion}, pi-codex-native ${adapterVersion}`);
 const fixture = fs.mkdtempSync(path.join(tmpdir(), "fm-native-primary."));
 const repo = path.join(fixture, "repo"),
   home = path.join(fixture, "home"),
@@ -318,6 +326,8 @@ try {
     JSON.stringify(
       {
         result: "PASS",
+        piVersion,
+        adapterVersion,
         ...(process.env.FM_NATIVE_TEST_KEEP === "1" ? { fixture } : {}),
         checks: [
           "actual Pi runtime and native package",
@@ -339,6 +349,9 @@ try {
       2,
     ),
   );
+} catch (error) {
+  console.error(`Native Codex guard failed against Pi ${piVersion}, pi-codex-native ${adapterVersion}`);
+  throw error;
 } finally {
   await stop();
   if (passed && process.env.FM_NATIVE_TEST_KEEP !== "1")
