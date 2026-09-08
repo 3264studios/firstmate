@@ -88,6 +88,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Box, Container, fuzzyFilter, Input, SelectList, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { registerFirstmateTool } from "./lib/fm-native-contract.ts";
 import { runCommandAsync } from "./lib/fm-async-exec.ts";
 import {
   type CalmPresentationState,
@@ -758,6 +759,9 @@ export default function (pi: ExtensionAPI) {
 
   async function resolveBranchModel(provider: string, modelId: string): Promise<BranchModelResolution> {
     const label = `${provider}/${modelId}`;
+    if (provider === "codex-native") {
+      return { ok: false, reason: `${label} belongs to the main native session; choose an ordinary Pi provider for supervision` };
+    }
     const modelRuntime = await ModelRuntime.create();
     let model = modelRuntime.getModel(provider, modelId) as BranchModel | undefined;
     if (!model) {
@@ -787,11 +791,22 @@ export default function (pi: ExtensionAPI) {
   // restored the model an earlier pin left behind. Only when main's model is
   // genuinely unknown, or the isolated runtime cannot run it, does the build
   // fall back to passing no override at all, which is the pre-feature
-  // behavior; an unpinned branch is never refused over model choice alone.
+  // behavior for ordinary Pi providers. Native main sessions require the
+  // explicit independent provider selection below.
   async function branchModelSelection(): Promise<PinnedBranchModel | undefined> {
     const pin = readModelPin();
     if (pin) return preparePinnedBranchModel(pin);
     if (!mainModel) return undefined;
+    // Native providers own a persistent main thread. The isolated supervision
+    // session must explicitly use Pi's independent agent loop, never inherit
+    // that provider or silently restore a recorded native selection.
+    if (mainModel.provider === "codex-native") {
+      const resolved = await resolveBranchModel("openai-codex", mainModel.id);
+      if (!resolved.ok) {
+        throw new Error(`native main requires an independent Pi supervision model: ${resolved.reason}; choose one with /supervision-model`);
+      }
+      return resolved.selection;
+    }
     try {
       const resolved = await resolveBranchModel(mainModel.provider, mainModel.id);
       return resolved.ok ? resolved.selection : undefined;
@@ -1714,7 +1729,7 @@ ${context.command}
         await copyExtensionProviders(modelRuntime);
         available = ctx.modelRegistry
           .getAvailable()
-          .filter((model) => modelRuntime.getModel(model.provider, model.id) && modelRuntime.hasConfiguredAuth(model.provider))
+          .filter((model) => model.provider !== "codex-native" && modelRuntime.getModel(model.provider, model.id) && modelRuntime.hasConfiguredAuth(model.provider))
           .map(modelLabel);
       } catch (error) {
         ctx.ui.notify(
@@ -2030,7 +2045,7 @@ ${context.command}
     return shell;
   };
 
-  pi.registerTool?.({
+  registerFirstmateTool(pi, {
     name: "fm_branch_outcomes",
     label: "Read supervision branch outcomes",
     description:
@@ -2092,7 +2107,7 @@ ${context.command}
   // cursor, never backwards), and refused outside lock ownership, so neither a
   // paraphrase, an empty reply, nor a stale generation can mark an outcome
   // processed.
-  pi.registerTool?.({
+  registerFirstmateTool(pi, {
     name: "fm_branch_processed",
     label: "Acknowledge processed supervision outcomes",
     description:
