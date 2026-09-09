@@ -356,6 +356,77 @@ test_e2e_daemon_parented_version_named_session_keeps_its_lock() {
   pass "session-lock e2e: a version-named session under a harness-named daemon keeps its own lock"
 }
 
+# Pin the native bridge without accepting a generic Codex session, a wrapper,
+# a non-harness gap, or a lookalike Pi process as the owning session.
+test_pi_native_owner() {
+  local dir fakebin shape got expected
+  dir="$TMP_ROOT/pi-native"
+  fakebin=$(fm_fakebin "$dir")
+  mkdir -p "$dir/state"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+field=$2 pid=$4
+case "$pid:$field" in
+  700:comm=) echo /Applications/ChatGPT.app/Contents/Resources/codex ;;
+  700:args=)
+    if [ "$FM_TEST_NATIVE_SHAPE" = interactive ]; then echo 'codex exec task';
+    else echo '/Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --stdio'; fi ;;
+  700:ppid=) echo 800 ;;
+  800:comm=|800:args=)
+    case "$FM_TEST_NATIVE_SHAPE" in
+      gap) echo bash ;; lookalike) echo pi-helper ;; signed) echo pi-signed ;; *) echo pi ;;
+    esac ;;
+  800:ppid=) echo 900 ;;
+  900:comm=|900:args=) echo pi-signed ;;
+  900:ppid=) echo 1 ;;
+  *:comm=|*:args=) echo bash ;;
+  *:ppid=) echo 700 ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+  for shape in native signed interactive gap lookalike; do
+    expected=700
+    case "$shape" in native|signed) expected=800 ;; esac
+    got=$(FM_TEST_NATIVE_SHAPE="$shape" lib_eval "$fakebin" 'fm_harness_ancestry_pid') || fail "$shape: no owner"
+    [ "$got" = "$expected" ] || fail "$shape: owner $got, expected $expected"
+    printf '%s\n' "$expected" > "$dir/state/.lock"
+    FM_TEST_NATIVE_SHAPE="$shape" FM_NATIVE_STATE="$dir/state" lib_eval "$fakebin" 'fm_session_lock_owned_by_self "$FM_NATIVE_STATE"' || fail "$shape: shell rejected canonical owner"
+    printf '900\n' > "$dir/state/.lock"
+    if FM_TEST_NATIVE_SHAPE="$shape" FM_NATIVE_STATE="$dir/state" lib_eval "$fakebin" 'fm_session_lock_owned_by_self "$FM_NATIVE_STATE"'; then
+      fail "$shape: accepted outer wrapper or foreign session"
+    fi
+  done
+  pass "Pi native owner: direct app-server bridge only; shell membership agrees"
+}
+
+test_pi_native_real_processes() {
+  local dir out
+  dir="$TMP_ROOT/pi-native-processes"
+  mkdir -p "$dir/state"
+  ln -s /bin/bash "$dir/pi"
+  ln -s /bin/bash "$dir/codex"
+  cat > "$dir/app-server" <<'SH'
+#!/usr/bin/env bash
+"$FM_NATIVE_ROOT/bin/fm-lock.sh" || exit
+. "$FM_NATIVE_ROOT/bin/fm-session-lock-lib.sh"
+fm_session_lock_owned_by_self "$FM_HOME/state" || exit
+[ "$(cat "$FM_HOME/state/.lock")" = "$PPID" ] || exit 1
+printf '%s\n' "$$" >> "$FM_HOME/state/children"
+SH
+  cat > "$dir/pi-session" <<'SH'
+#!/usr/bin/env bash
+cd "$FM_HOME" || exit 1
+./codex app-server --stdio || exit
+./codex app-server --stdio || exit
+[ "$(cat state/.lock)" = "$$" ] || exit 1
+[ "$(sort -u state/children | wc -l | tr -d ' ')" = 2 ] || exit 1
+SH
+  out=$(FM_HOME="$dir" FM_STATE_OVERRIDE="$dir/state" FM_NATIVE_ROOT="$ROOT" "$dir/pi" "$dir/pi-session" 2>&1) || fail "real Pi/native tree: $out"
+  pass "real Pi/native tree: lock acquisition and shell checks survive child replacement"
+}
+
+test_pi_native_real_processes
+test_pi_native_owner
 test_version_named_session_is_identified_on_both_platforms
 test_ordinary_paths_are_never_harness_processes
 test_harness_beyond_a_gap_never_owns_the_lock

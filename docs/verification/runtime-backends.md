@@ -1489,17 +1489,22 @@ Those absolute figures are specific to this host and Pi version; the guards asse
 
 ## Native Codex through Pi
 
-Verified on 2026-09-08 with Pi 0.85.1 and the installed `pi-codex-native` 0.2.1 adapter.
+Verified on 2026-09-09 with Pi 0.85.1, Codex CLI 0.153.4, and the installed `pi-codex-native` 0.2.1 adapter.
 Run this token-free guard after updating Pi, Codex, or the adapter:
 
 ```sh
-FM_PI_CODEX_NATIVE_LIVE=1 bash tests/fm-pi-codex-native.test.sh
+FM_PI_CODEX_NATIVE_LIVE=1 FM_NATIVE_CODEX_BIN=/Applications/ChatGPT.app/Contents/Resources/codex bash tests/fm-pi-codex-native.test.sh
 ```
 
 Observed result: `"result": "PASS"`.
 The guard runs the real Pi runtime, native adapter, three FirstMate primary extensions, native MCP transport, and FirstMate's durable outcome scripts in an isolated home.
 It verifies native `ultra` on initial and operational turns and after restart, startup operational input, watcher arming, a notification while main is idle, outcome read and one acknowledgement, refusal of a duplicate acknowledgement, and no reprocessing after restart.
-Its native App Server peer and watcher-close process are deterministic fixtures; it does not claim a real backend or a live model was tested by that command.
+The guard also runs full startup and shell ownership checks through the real Codex `command/exec` protocol, replaces that child under the same Pi process, and verifies the lock continues to name Pi.
+`FM_NATIVE_CODEX_BIN` selects the actual Codex executable for this probe; it defaults to `codex`.
+Model turns and watcher-close events use deterministic peers; this command does not verify a real fleet backend or live model.
+`tests/fm-session-lock-ancestry.test.sh` covers the direct native bridge, real-process child replacement, interactive Codex exclusion, non-harness gaps, and outer-wrapper rejection.
+`tests/fm-pi-watch-extension.test.sh` covers watcher recovery and session replacement, and verifies both Pi primary extensions reject a lock held by an enclosing process.
+The identity boundary is owned by `bin/fm-session-lock-lib.sh`; the extensions compare the resulting owner with their own Pi PID.
 `tests/fm-busy-state.test.sh`, `tests/fm-busy-adapter-wiring.test.sh`, and `tests/fm-watch-triage.test.sh` cover separate progress notification, unchanged semantic busy state, rejection of a superseded worker's events, and progress refreshing the busy-age bound without fabricating a completed turn.
 
 ## Oh My Pi (omp)
