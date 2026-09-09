@@ -142,10 +142,12 @@ fm_control_start_dir_resolve() {  # <worktree> <start-dir>
   case "$path" in
     "$root"|"$root"/*) ;;
     *)
+      # shellcheck disable=SC2034 # Output globals read by sourcing callers.
       FM_CONTROL_START_DIR_REASON="'$start_dir' physically escapes worktree '$worktree'"
       return 1
       ;;
   esac
+  # shellcheck disable=SC2034 # Output globals read by sourcing callers.
   FM_CONTROL_START_DIR_PATH=$path
 }
 

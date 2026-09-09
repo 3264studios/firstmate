@@ -500,7 +500,7 @@ for a in "$@"; do
   case "$a" in
     --scout) KIND=scout; KIND_SET=1 ;;
     --secondmate) KIND=secondmate; KIND_SET=1 ;;
-    --start-dir) want_value=start-dir ;;
+    --start-dir) want_value='start-dir' ;;
     --start-dir=*) START_DIR=${a#--start-dir=}; START_DIR_SET=1 ;;
     --relaunch) RELAUNCH=1 ;;
     --harness) want_value=harness ;;
