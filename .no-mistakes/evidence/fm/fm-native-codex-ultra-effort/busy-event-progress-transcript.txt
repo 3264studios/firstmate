@@ -1,0 +1,39 @@
+$ gen=$(bin/fm-busy-event.sh arm state w1)                       # incarnation 1 armed
+  gen=g1788915493.78222.26064
+$ cat state/w1.busy-state
+  v1 gen=g1788915493.78222.26064 seq=1 state=busy source=fm-spawn event=launch-brief ts=1788915493
+$ bin/fm-busy-event.sh progress state w1 --gen $gen               # adapter reported codex-native:progress
+  exit=0
+$ ls state/
+  w1.busy-gen
+  w1.busy-state
+  w1.progress
+$ cat state/w1.busy-state                                        # unchanged: progress is not a semantic state change
+  v1 gen=g1788915493.78222.26064 seq=1 state=busy source=fm-spawn event=launch-brief ts=1788915493
+$ [ -e state/w1.turn-ended ] || echo "no turn-ended marker fabricated"
+  no turn-ended marker fabricated
+$ gen2=$(bin/fm-busy-event.sh arm state w1)                      # relaunch: incarnation 2 replaces 1
+  gen2=g1788915493.78299.10981
+$ ls state/ | grep progress || echo "progress marker cleared by arm"
+  progress marker cleared by arm
+$ bin/fm-busy-event.sh progress state w1 --gen $gen               # OLD incarnation tries to refresh its replacement
+  error: stale busy-state gen for w1 (event rejected)
+  exit=1
+$ ls state/ | grep progress || echo "no marker: stale incarnation refused"
+  no marker: stale incarnation refused
+$ bin/fm-busy-event.sh progress state w1 --gen $gen2              # current incarnation
+  exit=0
+$ ls state/ | grep progress
+  w1.progress
+$ bin/fm-busy-event.sh progress state w1 --current-gen           # progress requires an explicit --gen
+  usage:
+    fm-busy-event.sh arm <state-dir> <id> [--state busy|idle|unknown] [--source S] [--event E]
+    fm-busy-event.sh apply <state-dir> <id> <busy|idle|unknown> (--gen G | --current-gen) --source S --event E
+    fm-busy-event.sh progress <state-dir> <id> --gen G
+    fm-busy-event.sh retire <state-dir> <id> (--gen G | --current-gen)
+  See the header comment for the full contract.
+  exit=2
+$ bin/fm-busy-event.sh retire state w1 --gen $gen2
+  exit=0
+$ ls -A state/ | wc -l                                            # retire cleared the progress marker too
+  0

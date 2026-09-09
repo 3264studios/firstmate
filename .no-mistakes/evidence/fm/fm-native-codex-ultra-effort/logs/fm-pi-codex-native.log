@@ -1,0 +1,22 @@
+Native Codex guard: Pi 0.85.1, pi-codex-native 0.2.1
+{
+  "result": "PASS",
+  "piVersion": "0.85.1",
+  "adapterVersion": "0.2.1",
+  "checks": [
+    "actual Pi runtime and native package",
+    "native Ultra preserved across operational turns and restart",
+    "installed native adapter emits observable output progress",
+    "actual FirstMate primary extensions",
+    "startup operational message forwarded",
+    "MCP watcher control",
+    "idle watcher notification opens native turn",
+    "durable completion visible/read/ack once",
+    "duplicate acknowledgement refused",
+    "restart does not reprocess acknowledged outcome"
+  ],
+  "limits": [
+    "native peer and watcher-close process are deterministic fixtures; no live model or backend tested"
+  ]
+}
+exit=0

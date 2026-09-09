@@ -1,0 +1,50 @@
+### BASE (main, b84e0e3) ###
+$ bin/fm-spawn.sh native-ultra-demo <project> --harness pi --model codex-native/gpt-6-astra --effort ultra --mode no-mistakes --yolo off
+  error: --effort must be one of low, medium, high, xhigh, max
+exit=1
+  (no launch; no state/native-ultra-demo.meta: absent)
+
+$ bin/fm-spawn.sh native-ultra-demo-raw <project> 'pi --offline' --model codex-native/gpt-6-astra --effort ultra   (raw launch)
+  error: --effort must be one of low, medium, high, xhigh, max
+exit=1
+
+$ bin/fm-spawn.sh native-ultra-demo-ord <project> --harness pi --model openai-codex/gpt-6-astra --effort ultra   (ordinary Pi provider)
+  error: --effort must be one of low, medium, high, xhigh, max
+exit=1
+
+$ bin/fm-harness.sh validate-native-effort pi codex-native/gpt-6-astra ultra
+  claude
+exit=0
+$ bin/fm-harness.sh validate-native-effort codex codex-native/gpt-6-astra ultra
+  claude
+exit=0
+
+### TARGET (8066a46) ###
+$ bin/fm-spawn.sh native-ultra-demo <project> --harness pi --model codex-native/gpt-6-astra --effort ultra --mode no-mistakes --yolo off
+  warning: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/fm-ultra-repro.EK9kja/native-ultra-demo/home/data/native-ultra-demo/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+  /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/fm-ultra-repro.EK9kja/native-ultra-demo/fake/fakebin/timeout: line 3: exec: 1: not found
+  /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/fm-ultra-repro.EK9kja/native-ultra-demo/fake/fakebin/timeout: line 3: exec: 1: not found
+  spawned native-ultra-demo harness=pi kind=ship mode=no-mistakes yolo=off window=firstmate:fm-native-ultra-demo worktree=/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/fm-ultra-repro.EK9kja/native-ultra-demo/wt
+exit=0
+
+launch command sent to the pane (fake tmux capture):
+  --model 'codex-native/gpt-6-astra' --codex-effort 'ultra'
+
+state/native-ultra-demo.meta profile axes:
+  harness=pi
+  model=codex-native/gpt-6-astra
+  effort=ultra
+
+$ bin/fm-spawn.sh native-ultra-demo-raw <project> 'pi --offline' --model codex-native/gpt-6-astra --effort ultra   (raw launch)
+  error: --effort ultra requires the canonical --harness pi or pi-signed launch so its native flag cannot be omitted
+exit=1
+
+$ bin/fm-spawn.sh native-ultra-demo-ord <project> --harness pi --model openai-codex/gpt-6-astra --effort ultra   (ordinary Pi provider)
+  error: ultra effort requires pi or pi-signed with an explicit codex-native/<model> model
+exit=1
+
+$ bin/fm-harness.sh validate-native-effort pi codex-native/gpt-6-astra ultra
+exit=0
+$ bin/fm-harness.sh validate-native-effort codex codex-native/gpt-6-astra ultra
+  error: ultra effort requires pi or pi-signed with an explicit codex-native/<model> model
+exit=1

@@ -1,0 +1,9 @@
+# The three new ultra cases from tests/fm-spawn-dispatch-profile.test.sh, run against bin/ from base b84e0e3 (reproduction the intent describes):
+not ok - native validator accepted a model prefix embedded in the harness axis
+not ok - native Ultra spawn failed: error: --effort must be one of low, medium, high, xhigh, max: expected exit 0, got 1
+not ok - native Ultra batch failed: error: --effort must be one of low, medium, high, xhigh, max: expected exit 0, got 1
+
+# The same three cases against this change's bin/ (from the full suite run, exit=0):
+ok - native effort validator checks harness and model as separate axes
+ok - Ultra is explicit for native Pi and Pi-signed, including direct-PR, and refuses unsupported profiles before provisioning
+ok - batch dispatch preserves native Ultra in metadata and launch flags
