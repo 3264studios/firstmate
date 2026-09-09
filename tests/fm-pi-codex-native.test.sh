@@ -9,7 +9,7 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-fm_live_gate default-on FM_PI_CODEX_NATIVE_LIVE node "${FM_PI_BIN:-pi}"
+fm_live_gate default-on FM_PI_CODEX_NATIVE_LIVE node "${FM_PI_BIN:-pi}" "${FM_NATIVE_CODEX_BIN:-codex}"
 PI_CODEX_NATIVE_PACKAGE=${PI_CODEX_NATIVE_PACKAGE:-"$HOME/.pi/agent/packages/pi-codex-native"}
 if [ ! -f "$PI_CODEX_NATIVE_PACKAGE/index.ts" ]; then
   if [ "${FM_PI_CODEX_NATIVE_LIVE:-${FM_LIVE:-0}}" = 1 ]; then
@@ -44,6 +44,7 @@ const repo = path.join(fixture, "repo"),
 fs.mkdirSync(path.join(repo, "bin"), { recursive: true });
 fs.mkdirSync(state, { recursive: true });
 fs.mkdirSync(path.join(home, "config"));
+fs.symlinkSync(path.join(root, "docs"), path.join(repo, "docs"));
 fs.cpSync(
   path.join(root, ".pi/extensions"),
   path.join(repo, ".pi/extensions"),
@@ -61,6 +62,9 @@ script(
   '#!/usr/bin/env bash\nprintf "NATIVE_PRIMARY_STARTUP_SENTINEL\\n"\n',
 );
 script("fm-turnend-guard.sh", "#!/usr/bin/env bash\nexit 0\n");
+// Full startup runs below; external services and fleet work are fixture-only.
+for (const name of ["fm-bootstrap.sh", "fm-startup-network.sh", "fm-wake-drain.sh"])
+  script(name, "#!/usr/bin/env bash\nexit 0\n");
 script(
   "fm-watch-arm.sh",
   `#!/usr/bin/env bash
@@ -74,11 +78,48 @@ while :; do
 done
 `,
 );
+// Exercise the installed Codex executable's token-free command/exec under Pi.
+// The protocol peer below cannot establish the real binary's process identity.
 const own = path.join(fixture, "own-lock.ts");
-fs.writeFileSync(
-  own,
-  `import {writeFileSync,appendFileSync} from 'node:fs'; export default function(pi){pi.on('session_start',()=>writeFileSync(process.env.FM_HOME+'/state/.lock',String(process.pid)+'\\n'));pi.events.on('codex-native:progress',event=>appendFileSync(process.env.FM_HOME+'/state/progress-events',JSON.stringify(event)+'\\n'));}`,
-);
+const ownershipProbe = path.join(fixture, "ownership-probe.sh");
+fs.writeFileSync(ownershipProbe, `#!/usr/bin/env bash
+export FM_ROOT_OVERRIDE="$1" FM_HOME="$2" FM_STATE_OVERRIDE="$2/state"
+"$1/bin/fm-session-start.sh" > "$2/state/native-startup.out" || exit
+if grep -q 'READ-ONLY SESSION' "$2/state/native-startup.out"; then
+  cat "$2/state/native-startup.out"
+  exit 1
+fi
+"$1/bin/fm-lock.sh" || exit
+. "$1/bin/fm-session-lock-lib.sh"
+fm_session_lock_owned_by_self "$2/state" || exit
+cat "$2/state/.lock"
+`, { mode: 0o755 });
+fs.writeFileSync(own, `
+import {appendFileSync,readFileSync} from 'node:fs';
+import assert from 'node:assert/strict';
+import {CodexAppServer} from ${JSON.stringify(path.join(nativePackage, "app-server.mjs"))};
+export default function(pi) {
+ pi.on('session_start', async () => {
+  const children = [];
+  for (let i = 0; i < 2; i++) {
+   const server = new CodexAppServer({cwd:${JSON.stringify(repo)}, executable:process.env.FM_NATIVE_CODEX_BIN || 'codex'});
+   try {
+    await server.start();
+    children.push(server.child.pid);
+    const result = await server.request('command/exec', {
+     command:['bash',${JSON.stringify(ownershipProbe)},${JSON.stringify(repo)},process.env.FM_HOME],
+     cwd:${JSON.stringify(repo)}, sandboxPolicy:{type:'dangerFullAccess'}, timeoutMs:30000,
+    }, 40000);
+    assert.equal(result.exitCode,0,JSON.stringify(result));
+    assert.equal(readFileSync(process.env.FM_HOME+'/state/.lock','utf8').trim(),String(process.pid),JSON.stringify(result));
+   } finally { await server.close(); }
+  }
+  assert.notEqual(children[0],children[1]);
+  appendFileSync(process.env.FM_HOME+'/state/ownership-probes',JSON.stringify({owner:process.pid,children})+'\\n');
+ });
+ pi.events.on('codex-native:progress', event => appendFileSync(process.env.FM_HOME+'/state/progress-events',JSON.stringify(event)+'\\n'));
+}
+`);
 const peer = path.join(fixture, "native-peer.mjs");
 fs.writeFileSync(
   peer,
@@ -184,6 +225,7 @@ async function start(resume) {
     env: {
       ...process.env,
       FM_HOME: home,
+      FM_STATE_OVERRIDE: state,
       FM_ROOT_OVERRIDE: repo,
       PI_CODEX_NATIVE_BIN: peer,
       PI_CODING_AGENT_DIR: path.join(fixture, "pi-config"),
@@ -237,6 +279,8 @@ try {
     () => events.some((e) => e.type === "agent_settled"),
     "first settle",
   );
+  assert(fs.existsSync(path.join(state, "ownership-probes")), "real native ownership probe failed: " + child.err);
+  assert.equal(fs.readFileSync(path.join(state, ".lock"), "utf8").trim(), String(child.pid));
   assert(
     log().some(
       (e) =>
@@ -331,6 +375,8 @@ try {
         ...(process.env.FM_NATIVE_TEST_KEEP === "1" ? { fixture } : {}),
         checks: [
           "actual Pi runtime and native package",
+          "full startup through real Codex command/exec and shell ownership",
+          "native child replacement preserves Pi owner",
           "native Ultra preserved across operational turns and restart",
           "installed native adapter emits observable output progress",
           "actual FirstMate primary extensions",
@@ -342,7 +388,7 @@ try {
           "restart does not reprocess acknowledged outcome",
         ],
         limits: [
-          "native peer and watcher-close process are deterministic fixtures; no live model or backend tested",
+          "model turns and watcher-close process use deterministic peers; no live model or backend tested",
         ],
       },
       null,
