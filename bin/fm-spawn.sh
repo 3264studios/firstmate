@@ -34,6 +34,9 @@
 #   allocation/refresh and physically resolve inside that root (symlinks may
 #   not escape). start_dir= in metadata preserves the relative choice; absence
 #   keeps legacy root startup. Relaunch revalidates it and refuses overrides.
+#   A fresh launch refused after its slot was allocated returns that still-clean
+#   slot and closes its new endpoint; a relaunch refusal leaves the recorded
+#   endpoint and worktree untouched.
 #   Only the harness runs in a subshell at that directory; its exit returns to
 #   the unchanged root shell. Allocation, hooks, ownership, and teardown still
 #   use worktree=. A launch-time physical-path check refuses directory retargeting.
@@ -1237,12 +1240,6 @@ if [ "$RELAUNCH" -eq 0 ]; then
     BACKEND=$BACKEND_ARG
   else
     BACKEND=$(fm_backend_name)
-  fi
-  if [ "$START_DIR_SET" -eq 1 ]; then
-    case "$BACKEND" in
-      tmux|herdr) ;;
-      *) echo "error: --start-dir supports only canonical Pi/Pi-signed ship/scout launches on tmux or herdr" >&2; exit 1 ;;
-    esac
   fi
   fm_backend_validate_spawn "$BACKEND" || exit 1
   fm_backend_source "$BACKEND" || exit 1
@@ -3055,20 +3052,40 @@ rovo_wait_for_delivery() {
 rovo_spawn_fail() {  # <detail>
   printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
-  rovo_endpoint_cleanup
+  spawn_endpoint_cleanup
 }
 
-# No task record is ever published on this failure path, so nothing else
+# No task record is ever published on these failure paths, so nothing else
 # (teardown, the watcher) will ever learn this endpoint exists to close it:
-# without this, the already-launched --yolo rovo process keeps running as an
+# without this, an already-launched --yolo rovo process keeps running as an
 # orphaned autonomous agent outside task control. Mirrors fm-teardown.sh's own
 # generic non-orca kill call; orca's worktree+terminal are owned by the
 # separate ORCA_ABORT_CLEANUP trap path and are out of scope here.
-rovo_endpoint_cleanup() {
+spawn_endpoint_cleanup() {
   [ "$BACKEND" = orca ] && return 0
   local tab_id=
   [ "$BACKEND" = zellij ] && tab_id=$ZELLIJ_TAB_ID
   fm_backend_kill "$BACKEND" "$T" "$tab_id" "fm-$ID" 2>/dev/null || true
+}
+
+# A fresh launch refused after `treehouse get` already allocated its slot owns
+# exactly two things nothing else will ever find: the endpoint this process
+# created and the slot it just proved clean and reset. Only those are retired,
+# and the slot is rechecked first so work that appeared in between is never
+# discarded; anything less certain is left in place with the remedy named.
+spawn_fresh_allocation_retire() {
+  local status out
+  if ! status=$(git -C "$WT" -c core.quotePath=false status --porcelain 2>/dev/null) || [ -n "$status" ]; then
+    echo "error: pooled worktree '$WT' can no longer be proven clean; leaving it and window $T in place for inspection" >&2
+    return 1
+  fi
+  if ! out=$( (cd "$PROJ_ABS" && treehouse return --force "$WT") 2>&1 ); then
+    [ -z "$out" ] || printf '%s\n' "$out" >&2
+    echo "error: could not return pooled worktree '$WT'; leaving it and window $T in place (return it with: cd '$PROJ_ABS' && treehouse return --force '$WT')" >&2
+    return 1
+  fi
+  spawn_endpoint_cleanup
+  echo "returned pooled worktree '$WT' and closed window $T" >&2
 }
 
 if [ "$RELAUNCH" -eq 1 ]; then
@@ -3156,14 +3173,21 @@ fi
 
 START_PATH=
 if [ "$START_DIR_SET" -eq 1 ]; then
-  START_PATH=$(CDPATH='' cd -- "$WT/$START_DIR" 2>/dev/null && pwd -P) || {
-    echo "error: --start-dir '$START_DIR' is not an accessible directory in '$WT'" >&2; exit 1
-  }
-  start_root=$(real_path_or_raw "$WT")
-  case "$START_PATH" in
-    "$start_root"|"$start_root"/*) ;;
-    *) echo "error: --start-dir '$START_DIR' physically escapes worktree '$WT'" >&2; exit 1 ;;
-  esac
+  start_dir_error=
+  if ! START_PATH=$(CDPATH='' cd -- "$WT/$START_DIR" 2>/dev/null && pwd -P); then
+    start_dir_error="--start-dir '$START_DIR' is not an accessible directory in '$WT'"
+  else
+    start_root=$(real_path_or_raw "$WT")
+    case "$START_PATH" in
+      "$start_root"|"$start_root"/*) ;;
+      *) start_dir_error="--start-dir '$START_DIR' physically escapes worktree '$WT'" ;;
+    esac
+  fi
+  if [ -n "$start_dir_error" ]; then
+    echo "error: $start_dir_error" >&2
+    [ "$RELAUNCH" -eq 1 ] || spawn_fresh_allocation_retire || true
+    exit 1
+  fi
 fi
 
 # Pre-register Claude's workspace trust for the worktree, at the first point the
@@ -3955,7 +3979,7 @@ if [ "$START_DIR_SET" -eq 1 ]; then
   # Keep the endpoint shell at the root for ordinary recovery. Recheck the
   # physical destination in the same subshell that starts Pi, before any brief
   # expansion or harness execution, so a changed symlink cannot misroute it.
-  LAUNCH="(CDPATH='' cd -- $(shell_quote "$WT/$START_DIR") && { [ \"\$(pwd -P)\" = $(shell_quote "$START_PATH") ] || { echo 'error: start directory changed before launch' >&2; exit 1; }; } && $LAUNCH)"
+  LAUNCH="(CDPATH='' cd -- $(shell_quote "$WT/$START_DIR") && [ \"\$(pwd -P)\" = $(shell_quote "$START_PATH") ] || { echo 'error: start directory changed before launch' >&2; exit 1; }; $LAUNCH)"
 fi
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"

@@ -1203,6 +1203,25 @@ SH
   pass "fm-spawn: actual ship/scout launch commands deliver the worker role contract"
 }
 
+# Record every backend retirement a spawn performs: window kills and treehouse
+# invocations, the latter with the physical directory they ran from.
+arm_retire_log() {
+  RETIRE_LOG="$CASE_DIR/retire.log"
+  export FM_RETIRE_LOG="$RETIRE_LOG"
+  : > "$RETIRE_LOG"
+  mv "$FAKEBIN_DIR/tmux" "$FAKEBIN_DIR/tmux-unlogged"
+  cat > "$FAKEBIN_DIR/tmux" <<'SH'
+#!/bin/bash
+[ "${1:-}" != kill-window ] || printf 'tmux %s\n' "$*" >> "$FM_RETIRE_LOG"
+exec "$(dirname "$0")/tmux-unlogged" "$@"
+SH
+  cat > "$FAKEBIN_DIR/treehouse" <<'SH'
+#!/bin/bash
+printf 'treehouse %s in %s\n' "$*" "$(pwd -P)" >> "$FM_RETIRE_LOG"
+SH
+  chmod +x "$FAKEBIN_DIR/tmux" "$FAKEBIN_DIR/treehouse"
+}
+
 # Run the delivered command, not just its spelling: Pi's process cwd changes,
 # while the invoking endpoint shell and durable worktree identity stay rooted.
 test_pi_start_directory_contract() {
@@ -1211,6 +1230,7 @@ test_pi_start_directory_contract() {
     id="start-$harness"
     rec=$(make_spawn_case "$id" "$harness" "$id")
     read_case_record "$rec"
+    arm_retire_log
     mkdir -p "$WT_DIR/games/a b's"
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
       "$id" "$PROJ_DIR" --start-dir "games/a b's" --model codex-native/gpt-6-astra --effort high)
@@ -1257,28 +1277,59 @@ TMUX
     out=$(FM_START_ID="$id" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --relaunch --harness codex)
     expect_code 1 "$?" "relaunch into unsupported harness accepted: $out"
     assert_contains "$out" 'supports only canonical Pi' "relaunch did not explain unsupported harness"
+    # The relaunch command carries its own `;`-separated prefix; a directory
+    # that vanished after spawn must still end the subshell before Pi runs.
     rm -d "$WT_DIR/games/a b's"
+    out=$(cd "$WT_DIR" && FM_START_CAPTURE="$CASE_DIR/relaunch-missing" sh -c "$launch" 2>&1)
+    expect_code 1 "$?" "relaunch command ran without its start directory: $out"
+    assert_contains "$out" 'start directory changed before launch' 'missing-directory launch refusal absent'
+    [ ! -f "$CASE_DIR/relaunch-missing" ] || fail 'harness executed after its start directory vanished'
     out=$(FM_START_ID="$id" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --relaunch)
     expect_code 1 "$?" "relaunch accepted missing start directory: $out"
     assert_contains "$out" 'not an accessible directory' "missing relaunch directory diagnostic absent"
+    assert_no_grep 'kill-window' "$RETIRE_LOG" "relaunch refusal closed the task's own endpoint"
+    assert_no_grep 'treehouse return' "$RETIRE_LOG" "relaunch refusal returned the task's own worktree"
+    assert_grep "start_dir=games/a b's" "$HOME_DIR/state/$id.meta" "relaunch refusal dropped the recorded start directory"
+    assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" "relaunch refusal changed root identity"
   done
-  pass 'Pi/Pi-signed nested startup executes in contained cwd, preserves root shell and metadata through relaunch'
+  pass 'Pi/Pi-signed nested startup executes in contained cwd, preserves root shell and metadata through relaunch, and never starts without its directory'
 }
 
 test_start_directory_refusals() {
-  local rec out value axis
+  local rec out value axis proj_real
   rec=$(make_spawn_case start-refusals pi refused)
   read_case_record "$rec"
+  arm_retire_log
+  proj_real=$(cd "$PROJ_DIR" && pwd -P)
   mkdir -p "$WT_DIR/games" "$CASE_DIR/outside"
   ln -s "$CASE_DIR/outside" "$WT_DIR/escape"
   printf 'escape\n' >> "$(git -C "$WT_DIR" rev-parse --git-path info/exclude)"
   mkdir -p "$WT_DIR/a"$'\n'"b"
-  for value in '' /tmp .. games/../../outside "a"$'\n'"b" missing escape; do
+  for value in '' /tmp .. games/../../outside "a"$'\n'"b"; do
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --start-dir="$value")
     expect_code 1 "$?" "invalid directory was accepted: $value: $out"
     assert_contains "$out" '--start-dir' "directory refusal is unexplained"
     [ ! -f "$HOME_DIR/state/refused.meta" ] || fail "invalid directory published metadata"
+    [ ! -s "$RETIRE_LOG" ] || fail "refusal before allocation retired a resource: $(cat "$RETIRE_LOG")"
   done
+  # These are only refusable once `treehouse get` has produced the slot, so the
+  # refusal must give back that clean slot and close its window itself.
+  for value in missing escape; do
+    : > "$RETIRE_LOG"
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --start-dir="$value")
+    expect_code 1 "$?" "invalid directory was accepted: $value: $out"
+    assert_contains "$out" '--start-dir' "directory refusal is unexplained"
+    [ ! -f "$HOME_DIR/state/refused.meta" ] || fail "invalid directory published metadata"
+    assert_contains "$out" "returned pooled worktree '$WT_DIR'" "post-allocation refusal did not report retiring its slot"
+    assert_grep "treehouse return --force $WT_DIR in $proj_real" "$RETIRE_LOG" "allocated slot was not returned from the project for $value"
+    assert_grep 'kill-window' "$RETIRE_LOG" "new window was not closed for $value"
+    assert_grep 'fm-refused' "$RETIRE_LOG" "a window other than the refused launch's own was closed for $value"
+  done
+  cat > "$FAKEBIN_DIR/orca" <<'SH'
+#!/bin/sh
+printf '%s\n' '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}'
+SH
+  chmod +x "$FAKEBIN_DIR/orca"
   for axis in claude codex opencode grok kimi cursor muse gemini rovo omp; do
     out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --harness "$axis" --start-dir .)
     expect_code 1 "$?" "unsupported $axis accepted: $out"
@@ -1298,7 +1349,8 @@ test_start_directory_refusals() {
   out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --secondmate --start-dir .)
   expect_code 1 "$?" "secondmate accepted start directory: $out"
   assert_contains "$out" 'not secondmates' 'secondmate refusal missing'
-  pass 'invalid directories and unsupported start-directory axes fail explicitly without task publication'
+  [ ! -f "$HOME_DIR/state/refused.meta" ] || fail "an unsupported axis published metadata"
+  pass 'invalid directories and unsupported start-directory axes fail explicitly without task publication; refused fresh allocations are returned'
 }
 
 
