@@ -376,7 +376,7 @@ test_active_dispatch_profile_allows_raw_launch_command() {
   out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
     "$id" "$PROJ_DIR" "custom-agent --flag")
   status=$?
-  expect_code 0 "$status" "raw launch command should satisfy active dispatch-profile requirement"
+  expect_code 0 "$status" "raw launch command should satisfy active dispatch-profile requirement: $out"
   assert_contains "$out" "spawned $id harness=custom-agent" "spawn did not report raw command harness"
   assert_meta_profile "$HOME_DIR/state/$id.meta" custom-agent default default
   launch=$(cat "$LAUNCH_LOG")
@@ -1202,6 +1202,147 @@ SH
   done
   pass "fm-spawn: actual ship/scout launch commands deliver the worker role contract"
 }
+
+# Run the delivered command, not just its spelling: Pi's process cwd changes,
+# while the invoking endpoint shell and durable worktree identity stay rooted.
+test_pi_start_directory_contract() {
+  local rec id out launch expected before harness
+  for harness in pi pi-signed; do
+    id="start-$harness"
+    rec=$(make_spawn_case "$id" "$harness" "$id")
+    read_case_record "$rec"
+    mkdir -p "$WT_DIR/games/a b's"
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" \
+      "$id" "$PROJ_DIR" --start-dir "games/a b's" --model codex-native/gpt-6-astra --effort high)
+    expect_code 0 "$?" "nested $harness spawn failed: $out"
+    assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" "root identity changed"
+    assert_grep "start_dir=games/a b's" "$HOME_DIR/state/$id.meta" "relative directory was not persisted"
+    assert_meta_profile "$HOME_DIR/state/$id.meta" "$harness" codex-native/gpt-6-astra high
+    launch=$(cat "$LAUNCH_LOG")
+    cat > "$FAKEBIN_DIR/$harness" <<'CAPTURE'
+#!/bin/sh
+if [ "${1:-}" = --help ]; then exit 0; fi
+pwd -P > "$FM_START_CAPTURE"
+printf '%s\n' "$@" >> "$FM_START_CAPTURE"
+CAPTURE
+    chmod +x "$FAKEBIN_DIR/$harness"
+    expected=$(cd "$WT_DIR/games/a b's" && pwd -P)
+    (cd "$WT_DIR" && FM_START_CAPTURE="$CASE_DIR/capture" sh -c "$launch" && pwd -P > "$CASE_DIR/after") || fail "nested launch failed"
+    assert_grep "$expected" "$CASE_DIR/capture" "Pi did not start in nested directory"
+    assert_grep 'codex-native/gpt-6-astra' "$CASE_DIR/capture" "native model lost"
+    assert_grep 'high' "$CASE_DIR/capture" "effort lost"
+    assert_grep "$HOME_DIR/state/$id.pi-ext.ts" "$CASE_DIR/capture" "absolute worker extension lost"
+    [ "$(cat "$CASE_DIR/after")" = "$(cd "$WT_DIR" && pwd -P)" ] || fail "endpoint shell left root"
+
+    # A fake stopped endpoint supplies only the backend inputs; actual relaunch
+    # performs the same metadata adoption and isolated-root checks as production.
+    mv "$FAKEBIN_DIR/tmux" "$FAKEBIN_DIR/tmux-base"
+    cat > "$FAKEBIN_DIR/tmux" <<'TMUX'
+#!/bin/bash
+case "$*" in
+  *'#{pane_current_command}'*) echo zsh; exit 0 ;;
+  'list-windows '*) printf '%s\n' "fm-$FM_START_ID"; exit 0 ;;
+esac
+exec "$(dirname "$0")/tmux-base" "$@"
+TMUX
+    chmod +x "$FAKEBIN_DIR/tmux"
+    before=$(sed -n 's/^spawn_gen=//p' "$HOME_DIR/state/$id.meta")
+    out=$(FM_START_ID="$id" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --relaunch)
+    expect_code 0 "$?" "relaunch failed: $out"
+    [ "$before" != "$(sed -n 's/^spawn_gen=//p' "$HOME_DIR/state/$id.meta")" ] || fail "relaunch did not replace generation"
+    launch=$(cat "$LAUNCH_LOG")
+    (cd "$WT_DIR" && FM_START_CAPTURE="$CASE_DIR/relaunch" sh -c "$launch") || fail "relaunch command failed"
+    assert_grep "$expected" "$CASE_DIR/relaunch" "relaunch lost start directory"
+    assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" "relaunch changed root identity"
+    out=$(FM_START_ID="$id" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --relaunch --harness codex)
+    expect_code 1 "$?" "relaunch into unsupported harness accepted: $out"
+    assert_contains "$out" 'supports only canonical Pi' "relaunch did not explain unsupported harness"
+    rm -d "$WT_DIR/games/a b's"
+    out=$(FM_START_ID="$id" run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" --relaunch)
+    expect_code 1 "$?" "relaunch accepted missing start directory: $out"
+    assert_contains "$out" 'not an accessible directory' "missing relaunch directory diagnostic absent"
+  done
+  pass 'Pi/Pi-signed nested startup executes in contained cwd, preserves root shell and metadata through relaunch'
+}
+
+test_start_directory_refusals() {
+  local rec out value axis
+  rec=$(make_spawn_case start-refusals pi refused)
+  read_case_record "$rec"
+  mkdir -p "$WT_DIR/games" "$CASE_DIR/outside"
+  ln -s "$CASE_DIR/outside" "$WT_DIR/escape"
+  printf 'escape\n' >> "$(git -C "$WT_DIR" rev-parse --git-path info/exclude)"
+  mkdir -p "$WT_DIR/a"$'\n'"b"
+  for value in '' /tmp .. games/../../outside "a"$'\n'"b" missing escape; do
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --start-dir="$value")
+    expect_code 1 "$?" "invalid directory was accepted: $value: $out"
+    assert_contains "$out" '--start-dir' "directory refusal is unexplained"
+    [ ! -f "$HOME_DIR/state/refused.meta" ] || fail "invalid directory published metadata"
+  done
+  for axis in claude codex opencode grok kimi cursor muse gemini rovo omp; do
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --harness "$axis" --start-dir .)
+    expect_code 1 "$?" "unsupported $axis accepted: $out"
+    assert_contains "$out" 'supports only canonical Pi' "unsupported harness not explicitly refused"
+  done
+  for axis in orca zellij cmux; do
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --backend "$axis" --start-dir .)
+    expect_code 1 "$?" "unsupported $axis accepted: $out"
+    assert_contains "$out" 'supports only canonical Pi' "unsupported backend not explicitly refused"
+  done
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" 'pi --model custom' --start-dir .)
+  expect_code 1 "$?" "raw launch accepted: $out"
+  assert_contains "$out" 'supports only canonical Pi' "raw launch not explicitly refused"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused --relaunch --start-dir .)
+  expect_code 1 "$?" "relaunch override accepted: $out"
+  assert_contains "$out" 'cannot override' "relaunch override diagnostic missing"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --secondmate --start-dir .)
+  expect_code 1 "$?" "secondmate accepted start directory: $out"
+  assert_contains "$out" 'not secondmates' 'secondmate refusal missing'
+  pass 'invalid directories and unsupported start-directory axes fail explicitly without task publication'
+}
+
+
+test_start_directory_root_batch_and_retarget() {
+  local rec out launch id
+  rec=$(make_spawn_case start-root-batch pi start-root start-a start-b)
+  read_case_record "$rec"
+  mkdir -p "$WT_DIR/game" "$CASE_DIR/outside"
+  ln -s game "$WT_DIR/game-link"
+  printf 'game-link\n' >> "$(git -C "$WT_DIR" rev-parse --git-path info/exclude)"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" start-root "$PROJ_DIR" --start-dir .)
+  expect_code 0 "$?" "explicit root failed: $out"
+  launch=$(cat "$LAUNCH_LOG")
+  cat > "$FAKEBIN_DIR/pi" <<'CAPTURE'
+#!/bin/sh
+[ "${1:-}" != --help ] || exit 0
+pwd -P > "$FM_START_CAPTURE"
+CAPTURE
+  (cd "$WT_DIR" && FM_START_CAPTURE="$CASE_DIR/root" sh -c "$launch") || fail 'explicit root launch failed'
+  [ "$(cat "$CASE_DIR/root")" = "$(cd "$WT_DIR" && pwd -P)" ] || fail 'explicit root changed cwd'
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "start-a=$PROJ_DIR" "start-b=$PROJ_DIR" --harness pi --start-dir game-link)
+  expect_code 0 "$?" "batch failed: $out"
+  for id in start-a start-b; do
+    assert_grep 'start_dir=game-link' "$HOME_DIR/state/$id.meta" "batch dropped relative directory"
+    assert_grep "worktree=$WT_DIR" "$HOME_DIR/state/$id.meta" "batch changed root identity"
+  done
+  # Execute the contained symlink first, then retarget the same delivered command.
+  launch=$(tail -n 1 "$LAUNCH_LOG")
+  (cd "$WT_DIR" && FM_START_CAPTURE="$CASE_DIR/contained" sh -c "$launch") || fail 'contained symlink launch failed'
+  [ "$(cat "$CASE_DIR/contained")" = "$(cd "$WT_DIR/game" && pwd -P)" ] || fail 'contained symlink did not resolve to game'
+  rm "$WT_DIR/game-link"
+  ln -s "$CASE_DIR/outside" "$WT_DIR/game-link"
+  out=$(cd "$WT_DIR" && FM_START_CAPTURE="$CASE_DIR/escaped" sh -c "$launch" 2>&1)
+  expect_code 1 "$?" "retargeted directory ran the harness: $out"
+  assert_contains "$out" 'start directory changed before launch' 'retarget refusal missing'
+  [ ! -f "$CASE_DIR/escaped" ] || fail 'harness executed after symlink escape'
+  pass 'explicit root and batch startup work; a launch-time symlink retarget refuses before harness execution'
+}
+
+
+test_start_directory_root_batch_and_retarget
+
+test_pi_start_directory_contract
+test_start_directory_refusals
 
 test_worker_launch_delivers_role_scope
 test_no_profile_keeps_claude_profile_defaults

@@ -1549,3 +1549,36 @@ A throwaway scout was spawned through `bin/fm-spawn.sh --scout --harness omp --m
 6. `bin/fm-control.sh <id> exit` stopped the agent and `bin/fm-teardown.sh` returned the worktree and closed the item.
 
 `FM_OMP_LIVE_E2E=1 tests/fm-omp-primary-live-e2e.test.sh` refreshes the primary evidence; the worker path above is refreshed by repeating the scout dispatch after any omp upgrade.
+
+### Pi worker startup below the worktree root
+
+Verified on 2026-09-09 with Pi 0.85.1, `pi-codex-native` 0.2.1, and Herdr 0.8.2 protocol 20.
+A credentialed disposable game fixture used a fresh named Herdr lab through `fm-herdr-lab.sh`, worker-only storage directories, and the normal spawn, steering, and control entrypoints.
+Pi and both native thread starts reported the same game subdirectory, with native `gpt-6-astra` and `high` effort.
+The worker followed a game-local instruction sentinel, read a game-local resource, acknowledged a durable steering message, and repeated the instruction proof after ordinary relaunch.
+The generated worker extension emitted busy, settled, turn-end, and native-progress signals; relaunch changed both generation tokens while preserving the endpoint, `worktree`, and `start_dir` fields.
+Guarded teardown succeeded and the default-session tripwire was identical before and after.
+The fixture allocator entered a preallocated linked worktree containing the committed default base; this verifies the launch and lifecycle contract, not Treehouse allocation itself.
+The command entrypoints were:
+
+```sh
+bin/fm-spawn.sh native-smoke "$fixture_project" --scout --harness pi --model codex-native/gpt-6-astra --effort high --backend herdr --start-dir games/demo
+bin/fm-send.sh native-smoke "$fixture_steering_instruction"
+bin/fm-control.sh native-smoke relaunch --note "$fixture_relaunch_instruction"
+bin/fm-control.sh native-smoke exit
+```
+
+Refresh portable command execution, containment, root identity, and relaunch coverage with:
+
+```sh
+bin/fm-test-run.sh tests/fm-spawn-dispatch-profile.test.sh
+```
+
+```text
+ok - explicit root and batch startup work; a launch-time symlink retarget refuses before harness execution
+ok - Pi/Pi-signed nested startup executes in contained cwd, preserves root shell and metadata through relaunch
+ok - invalid directories and unsupported start-directory axes fail explicitly without task publication
+```
+
+Those portable cases execute the delivered shell command against an argv/cwd capture executable; they do not claim a live Pi-signed or tmux model run.
+The supported startup-directory contract and explicit unsupported-axis refusals are owned by `bin/fm-spawn.sh --help`.

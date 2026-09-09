@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--start-dir <relative-directory>]
+#        fm-spawn.sh <task-id> <project-dir> --scout [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] [--start-dir <relative-directory>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -26,6 +26,17 @@
 #   Ship/scout launches always supply fm-dod-lib.sh's current worker role scope
 #   using the same private launch-brief overlay. This never rewrites a project's
 #   instruction files or a secondmate's charter.
+#   --start-dir <relative-directory> starts a canonical Pi or Pi-signed ship/scout
+#   inside its isolated worktree on tmux or Herdr. Other harnesses, raw commands,
+#   secondmates, and other backends refuse this option until verified.
+#   The value must be non-empty and relative, with no .. component or control
+#   characters; . selects the root. The directory must exist after worktree
+#   allocation/refresh and physically resolve inside that root (symlinks may
+#   not escape). start_dir= in metadata preserves the relative choice; absence
+#   keeps legacy root startup. Relaunch revalidates it and refuses overrides.
+#   Only the harness runs in a subshell at that directory; its exit returns to
+#   the unchanged root shell. Allocation, hooks, ownership, and teardown still
+#   use worktree=. A launch-time physical-path check refuses directory retargeting.
 #        fm-spawn.sh <task-id> --relaunch [--harness <name>] [--model <name>] [--effort <level>]
 #   --relaunch launches a replacement agent for an EXISTING task into that
 #   task's own recorded endpoint and worktree instead of creating either. It is
@@ -457,6 +468,8 @@ MODE_SET=0
 YOLO_SET=0
 TRACEPARENT_SET=0
 RELAUNCH=0
+START_DIR=
+START_DIR_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -465,6 +478,7 @@ for a in "$@"; do
       --*) echo "error: --$want_value requires a value" >&2; exit 1 ;;
     esac
     case "$want_value" in
+      start-dir) START_DIR=$a; START_DIR_SET=1 ;;
       harness) HARNESS_ARG=$a; HARNESS_SET=1 ;;
       model) MODEL=$a; MODEL_SET=1 ;;
       effort) EFFORT=$a; EFFORT_SET=1 ;;
@@ -480,6 +494,8 @@ for a in "$@"; do
   case "$a" in
     --scout) KIND=scout; KIND_SET=1 ;;
     --secondmate) KIND=secondmate; KIND_SET=1 ;;
+    --start-dir) want_value=start-dir ;;
+    --start-dir=*) START_DIR=${a#--start-dir=}; START_DIR_SET=1 ;;
     --relaunch) RELAUNCH=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
@@ -529,6 +545,7 @@ esac
 # task's own durable record below. Contradicting it on the command line is a
 # refusal rather than a silently-ignored flag.
 if [ "$RELAUNCH" -eq 1 ]; then
+  [ "$START_DIR_SET" -eq 0 ] || { echo "error: --relaunch reuses recorded start_dir; --start-dir cannot override it" >&2; exit 1; }
   [ "$BACKEND_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded backend; --backend cannot override it" >&2; exit 1; }
   [ "$KIND_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded kind; --scout/--secondmate cannot override it" >&2; exit 1; }
   [ "$MODE_SET" -eq 0 ] || { echo "error: --relaunch reuses the task's recorded delivery mode; --mode cannot override it" >&2; exit 1; }
@@ -1097,6 +1114,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   fi
   rc=0
   shared_args=()
+  [ "$START_DIR_SET" -eq 0 ] || shared_args+=(--start-dir "$START_DIR")
   [ -z "$HARNESS_ARG" ] || shared_args+=(--harness "$HARNESS_ARG")
   [ -z "$MODEL" ] || shared_args+=(--model "$MODEL")
   [ -z "$EFFORT" ] || shared_args+=(--effort "$EFFORT")
@@ -1195,6 +1213,10 @@ if [ "$RELAUNCH" -eq 0 ]; then
   fi
   SPAWN_TASK_SET_LOCK_HELD=1
 fi
+if [ "$START_DIR_SET" -eq 1 ] && [ "$KIND" = secondmate ]; then
+  echo "error: --start-dir supports only canonical Pi/Pi-signed ship/scout launches, not secondmates" >&2
+  exit 1
+fi
 if [ "$KIND" = secondmate ]; then
   if spawn_remote_secondmate "$ID"; then
     exit 0
@@ -1215,6 +1237,12 @@ if [ "$RELAUNCH" -eq 0 ]; then
     BACKEND=$BACKEND_ARG
   else
     BACKEND=$(fm_backend_name)
+  fi
+  if [ "$START_DIR_SET" -eq 1 ]; then
+    case "$BACKEND" in
+      tmux|herdr) ;;
+      *) echo "error: --start-dir supports only canonical Pi/Pi-signed ship/scout launches on tmux or herdr" >&2; exit 1 ;;
+    esac
   fi
   fm_backend_validate_spawn "$BACKEND" || exit 1
   fm_backend_source "$BACKEND" || exit 1
@@ -1290,6 +1318,10 @@ if [ "$RELAUNCH" -eq 1 ]; then
   [ -n "$KIND" ] || KIND=ship
   MODE=$(fm_meta_get "$RELAUNCH_META" mode)
   YOLO=$(fm_meta_get "$RELAUNCH_META" yolo)
+  if grep -q '^start_dir=' "$RELAUNCH_META"; then
+    START_DIR=$(fm_meta_get "$RELAUNCH_META" start_dir)
+    START_DIR_SET=1
+  fi
   RELAUNCH_WT=$(fm_meta_get "$RELAUNCH_META" worktree)
   [ -n "$RELAUNCH_WT" ] && [ -d "$RELAUNCH_WT" ] || {
     echo "error: task $ID's recorded worktree '${RELAUNCH_WT:-none}' is missing; refusing to relaunch without the local copy its work lives in" >&2
@@ -1645,6 +1677,20 @@ fi
 if [ "$KIND" = secondmate ] && [ "$HARNESS" = rovo ]; then
   echo "error: rovo is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
   exit 1
+fi
+
+if [ "$START_DIR_SET" -eq 1 ]; then
+  case "$START_DIR" in
+    ''|/*|..|../*|*/..|*/../*)
+      echo "error: --start-dir must be a non-empty contained relative directory without .. components" >&2; exit 1 ;;
+  esac
+  if [ "$(printf '%s' "$START_DIR" | LC_ALL=C tr -d '[:cntrl:]')" != "$START_DIR" ]; then
+    echo "error: --start-dir cannot contain control characters" >&2; exit 1
+  fi
+  case "$HARNESS:$BACKEND:$KIND:$RAW_LAUNCH" in
+    pi:tmux:ship:0|pi:tmux:scout:0|pi:herdr:ship:0|pi:herdr:scout:0|pi-signed:tmux:ship:0|pi-signed:tmux:scout:0|pi-signed:herdr:ship:0|pi-signed:herdr:scout:0) ;;
+    *) echo "error: --start-dir supports only canonical Pi/Pi-signed ship/scout launches on tmux or herdr (got $HARNESS/$BACKEND/$KIND raw=$RAW_LAUNCH)" >&2; exit 1 ;;
+  esac
 fi
 
 case "$HARNESS" in
@@ -3108,6 +3154,18 @@ if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
 fi
 
+START_PATH=
+if [ "$START_DIR_SET" -eq 1 ]; then
+  START_PATH=$(CDPATH='' cd -- "$WT/$START_DIR" 2>/dev/null && pwd -P) || {
+    echo "error: --start-dir '$START_DIR' is not an accessible directory in '$WT'" >&2; exit 1
+  }
+  start_root=$(real_path_or_raw "$WT")
+  case "$START_PATH" in
+    "$start_root"|"$start_root"/*) ;;
+    *) echo "error: --start-dir '$START_DIR' physically escapes worktree '$WT'" >&2; exit 1 ;;
+  esac
+fi
+
 # Pre-register Claude's workspace trust for the worktree, at the first point the
 # worktree is known and before any per-task state is created below. The dialog
 # gates the pane before the brief is ever read, and it also gates loading the
@@ -3596,7 +3654,7 @@ SPAWN_META_PATH=$SPAWN_META_TMP
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree start_dir project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -3606,6 +3664,7 @@ preserve_relaunch_meta() {
   echo "window=$META_WINDOW"
   echo "endpoint_task_id=$ID"
   echo "worktree=$WT"
+  [ "$START_DIR_SET" -eq 0 ] || echo "start_dir=$START_DIR"
   echo "project=$PROJ_ABS"
   echo "harness=$HARNESS"
   echo "kind=$KIND"
@@ -3891,6 +3950,12 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
     LAUNCH_ENV_PREFIX="$LAUNCH_ENV_PREFIX "'${TRACEPARENT+"TRACEPARENT=$TRACEPARENT"}'
   fi
   LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$LAUNCH")"
+fi
+if [ "$START_DIR_SET" -eq 1 ]; then
+  # Keep the endpoint shell at the root for ordinary recovery. Recheck the
+  # physical destination in the same subshell that starts Pi, before any brief
+  # expansion or harness execution, so a changed symlink cannot misroute it.
+  LAUNCH="(CDPATH='' cd -- $(shell_quote "$WT/$START_DIR") && { [ \"\$(pwd -P)\" = $(shell_quote "$START_PATH") ] || { echo 'error: start directory changed before launch' >&2; exit 1; }; } && $LAUNCH)"
 fi
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
