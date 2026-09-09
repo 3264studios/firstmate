@@ -403,7 +403,7 @@ try {
         piVersion,
         adapterVersion,
         ...(process.env.FM_NATIVE_TEST_KEEP === "1" ? { fixture } : {}),
-        versions: { pi: piVersion, "pi-codex-native": adapterVersion, codex: codexVersions },
+        codexVersions,
         checks: [
           "actual Pi runtime and native package",
           "full startup through real Codex command/exec and shell ownership",
