@@ -90,27 +90,58 @@ fm_harness_process_matches() {  # <comm> <args>
   return 1
 }
 
-# Pi's native transport is a direct `codex [-c key=value ...] app-server
-# --stdio` child. Only that concrete bridge resolves to its Pi parent; an
-# interactive/exec Codex session, a wrapper, or a gap remains its own session.
-# Use executable basenames and the command prefix, never a prompt substring or
-# inherited environment marker. The parent is read from the kernel each time,
-# so replacing the transport child does not replace the session identity.
-fm_pi_native_owner_pid() {  # <pid> <comm> <args>
-  local pid=$1 comm=$2 args=$3 parent parent_comm argv0
+# Pi's native transport is a `codex [-c key=value ...] app-server --stdio`
+# child of the Pi engine, either directly (the ChatGPT.app binary, or an
+# explicit PI_CODEX_NATIVE_BIN) or through exactly one hop of the installed npm
+# launcher: `node .../@openai/codex/bin/codex.js <same command>`, which spawns
+# the vendor binary and stays its parent. Only those two concrete shapes resolve
+# to the Pi parent; an interactive/exec Codex session, any other node process, a
+# wrapper, or a gap remains its own session. The evidence is executable
+# basenames, the launcher's symlink-resolved script path, and the exact command,
+# never a prompt substring or an inherited environment marker. Parents are read
+# from the kernel each time, so replacing the transport child does not replace
+# the session identity.
+fm_pi_native_transport_args() {  # <args> <program-words>
   local -a words
-  read -r -a words <<< "$args"
-  argv0=${words[0]:-}
-  [ "$(basename -- "$comm")" = codex ] || [ "${argv0##*/}" = codex ] || return 1
-  words=("${words[@]:1}")
+  read -r -a words <<< "$1"
+  words=("${words[@]:$2}")
   while [ "${words[0]:-}" = -c ]; do
     [ "${#words[@]}" -ge 2 ] || return 1
+    case "${words[1]}" in *=*) ;; *) return 1 ;; esac
     words=("${words[@]:2}")
   done
-  [ "${#words[@]}" -eq 2 ] && [ "${words[0]}" = app-server ] && [ "${words[1]}" = --stdio ] || return 1
-  parent=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ') || return 1
+  [ "${#words[@]}" -eq 2 ] && [ "${words[0]}" = app-server ] && [ "${words[1]}" = --stdio ]
+}
+
+fm_pi_native_npm_launcher() {  # <args>
+  local -a words
+  local script
+  read -r -a words <<< "$1"
+  [ "${#words[@]}" -ge 2 ] || return 1
+  script=$(fm_cursor_canonical_path "${words[1]}") || return 1
+  case "$script" in */@openai/codex/bin/codex.js) ;; *) return 1 ;; esac
+  fm_pi_native_transport_args "$1" 2
+}
+
+fm_pi_native_parent_pid() {  # <pid>
+  local parent
+  parent=$(ps -o ppid= -p "$1" 2>/dev/null | tr -d ' ') || return 1
   case "$parent" in ''|1|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$parent"
+}
+
+fm_pi_native_owner_pid() {  # <pid> <comm> <args>
+  local pid=$1 comm=$2 args=$3 parent parent_comm parent_args
+  [ "$(basename -- "$comm")" = codex ] || return 1
+  fm_pi_native_transport_args "$args" 1 || return 1
+  parent=$(fm_pi_native_parent_pid "$pid") || return 1
   parent_comm=$(ps -o comm= -p "$parent" 2>/dev/null) || return 1
+  if [ "$(basename -- "$parent_comm")" = node ]; then
+    parent_args=$(ps -o args= -p "$parent" 2>/dev/null)
+    fm_pi_native_npm_launcher "$parent_args" || return 1
+    parent=$(fm_pi_native_parent_pid "$parent") || return 1
+    parent_comm=$(ps -o comm= -p "$parent" 2>/dev/null) || return 1
+  fi
   case "$(basename -- "$parent_comm")" in
     pi|pi-signed) printf '%s\n' "$parent" ;;
     *) return 1 ;;
@@ -126,9 +157,9 @@ fm_pi_native_owner_pid() {  # <pid> <comm> <args>
 # into an unrelated harness further up the real process tree - for example the
 # live session that launched a test as its own subprocess.
 #
-# Except for the direct Pi/native bridge above and Claude below, the innermost
-# match is the session. Pi's shared signed-wrapper ancestry holds the lock at
-# the inner engine: a
+# Except for the Pi/native bridge above, which applies only to the first match,
+# and Claude below, the innermost match is the session. Pi's shared
+# signed-wrapper ancestry holds the lock at the inner engine: a
 # "pi-signed" launcher can be the direct parent of the inner "pi" engine pid that
 # owns the lock, and the wrapper pid above it is not that owner. Claude Code
 # instead runs hooks several levels below the session inside its own nested
@@ -142,7 +173,7 @@ fm_harness_ancestry_pids() {
     comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
     args=$(ps -o args= -p "$pid" 2>/dev/null)
     if fm_harness_process_matches "$comm" "$args"; then
-      if native_owner=$(fm_pi_native_owner_pid "$pid" "$comm" "$args"); then
+      if [ "$printed" -eq 0 ] && native_owner=$(fm_pi_native_owner_pid "$pid" "$comm" "$args"); then
         printf '%s\n' "$native_owner"
         return 0
       fi

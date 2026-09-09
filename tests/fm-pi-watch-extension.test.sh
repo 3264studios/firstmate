@@ -1874,11 +1874,11 @@ try {
   other.kill("SIGTERM");
 }
 
+writeFileSync(lock, `${process.ppid}\n`);
 const guardHandlers = new Map();
 const guard = await import(new URL("fm-primary-turnend-guard.ts", pathToFileURL(process.env.PLUGIN)).href);
 guard.default({ on(name, handler) { guardHandlers.set(name, handler); } });
 const guardMarker = `${process.env.FM_HOME}/state/.pi-turnend-extension-loaded`;
-writeFileSync(lock, `${process.ppid}\n`);
 guardHandlers.get("session_start")({ reason: "reload" }, {});
 if (existsSync(guardMarker)) throw new Error("guard marked loaded for enclosing foreign session");
 const ancestor = await callArm();

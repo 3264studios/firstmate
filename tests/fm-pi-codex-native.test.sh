@@ -9,7 +9,27 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-fm_live_gate default-on FM_PI_CODEX_NATIVE_LIVE node "${FM_PI_BIN:-pi}" "${FM_NATIVE_CODEX_BIN:-codex}"
+# Mirror the adapter's own executable resolution: the ChatGPT.app binary when
+# installed, else PATH codex. When PATH codex is the installed npm launcher and
+# is not already the probe executable, the ownership probe runs through it too.
+FM_NATIVE_GUI_CODEX=/Applications/ChatGPT.app/Contents/Resources/codex
+if [ -z "${FM_NATIVE_CODEX_BIN:-}" ]; then
+  if [ -x "$FM_NATIVE_GUI_CODEX" ]; then FM_NATIVE_CODEX_BIN=$FM_NATIVE_GUI_CODEX; else FM_NATIVE_CODEX_BIN=codex; fi
+fi
+export FM_NATIVE_CODEX_BIN
+fm_live_gate default-on FM_PI_CODEX_NATIVE_LIVE node "${FM_PI_BIN:-pi}" "$FM_NATIVE_CODEX_BIN"
+# shellcheck source=bin/fm-session-lock-lib.sh
+. "$ROOT/bin/fm-session-lock-lib.sh"
+FM_NATIVE_CODEX_LAUNCHER=$(command -v codex 2>/dev/null || true)
+if [ -n "$FM_NATIVE_CODEX_LAUNCHER" ] && [ "$FM_NATIVE_CODEX_LAUNCHER" != "$(command -v "$FM_NATIVE_CODEX_BIN")" ]; then
+  case "$(fm_cursor_canonical_path "$FM_NATIVE_CODEX_LAUNCHER")" in
+    */@openai/codex/bin/codex.js) ;;
+    *) FM_NATIVE_CODEX_LAUNCHER='' ;;
+  esac
+else
+  FM_NATIVE_CODEX_LAUNCHER=''
+fi
+export FM_NATIVE_CODEX_LAUNCHER
 PI_CODEX_NATIVE_PACKAGE=${PI_CODEX_NATIVE_PACKAGE:-"$HOME/.pi/agent/packages/pi-codex-native"}
 if [ ! -f "$PI_CODEX_NATIVE_PACKAGE/index.ts" ]; then
   if [ "${FM_PI_CODEX_NATIVE_LIVE:-${FM_LIVE:-0}}" = 1 ]; then
@@ -36,7 +56,12 @@ let adapterVersion = "unknown";
 try {
   adapterVersion = JSON.parse(fs.readFileSync(path.join(nativePackage, "package.json"), "utf8")).version || "unknown";
 } catch { /* A source-only adapter may omit package metadata. */ }
-console.log(`Native Codex guard: Pi ${piVersion}, pi-codex-native ${adapterVersion}`);
+const codexExecutables = [process.env.FM_NATIVE_CODEX_BIN, process.env.FM_NATIVE_CODEX_LAUNCHER].filter(Boolean);
+const codexVersions = Object.fromEntries(codexExecutables.map((executable) => [
+  executable,
+  execFileSync(executable, ["--version"], { encoding: "utf8", timeout: 20000 }).trim(),
+]));
+console.log(`Native Codex guard: Pi ${piVersion}, pi-codex-native ${adapterVersion}, Codex ${JSON.stringify(codexVersions)}`);
 const fixture = fs.mkdtempSync(path.join(tmpdir(), "fm-native-primary."));
 const repo = path.join(fixture, "repo"),
   home = path.join(fixture, "home"),
@@ -78,8 +103,9 @@ while :; do
 done
 `,
 );
-// Exercise the installed Codex executable's token-free command/exec under Pi.
-// The protocol peer below cannot establish the real binary's process identity.
+// Exercise each real Codex executable's token-free command/exec under Pi: the
+// adapter's resolved binary and, when installed separately, the npm launcher.
+// The protocol peer below cannot establish a real binary's process identity.
 const own = path.join(fixture, "own-lock.ts");
 const ownershipProbe = path.join(fixture, "ownership-probe.sh");
 fs.writeFileSync(ownershipProbe, `#!/usr/bin/env bash
@@ -100,22 +126,24 @@ import assert from 'node:assert/strict';
 import {CodexAppServer} from ${JSON.stringify(path.join(nativePackage, "app-server.mjs"))};
 export default function(pi) {
  pi.on('session_start', async () => {
-  const children = [];
-  for (let i = 0; i < 2; i++) {
-   const server = new CodexAppServer({cwd:${JSON.stringify(repo)}, executable:process.env.FM_NATIVE_CODEX_BIN || 'codex'});
-   try {
-    await server.start();
-    children.push(server.child.pid);
-    const result = await server.request('command/exec', {
-     command:['bash',${JSON.stringify(ownershipProbe)},${JSON.stringify(repo)},process.env.FM_HOME],
-     cwd:${JSON.stringify(repo)}, sandboxPolicy:{type:'dangerFullAccess'}, timeoutMs:30000,
-    }, 40000);
-    assert.equal(result.exitCode,0,JSON.stringify(result));
-    assert.equal(readFileSync(process.env.FM_HOME+'/state/.lock','utf8').trim(),String(process.pid),JSON.stringify(result));
-   } finally { await server.close(); }
+  for (const executable of ${JSON.stringify(codexExecutables)}) {
+   const children = [];
+   for (let i = 0; i < 2; i++) {
+    const server = new CodexAppServer({cwd:${JSON.stringify(repo)}, executable});
+    try {
+     await server.start();
+     children.push(server.child.pid);
+     const result = await server.request('command/exec', {
+      command:['bash',${JSON.stringify(ownershipProbe)},${JSON.stringify(repo)},process.env.FM_HOME],
+      cwd:${JSON.stringify(repo)}, sandboxPolicy:{type:'dangerFullAccess'}, timeoutMs:30000,
+     }, 40000);
+     assert.equal(result.exitCode,0,executable+': '+JSON.stringify(result));
+     assert.equal(readFileSync(process.env.FM_HOME+'/state/.lock','utf8').trim(),String(process.pid),executable+': '+JSON.stringify(result));
+    } finally { await server.close(); }
+   }
+   assert.notEqual(children[0],children[1]);
+   appendFileSync(process.env.FM_HOME+'/state/ownership-probes',JSON.stringify({executable,owner:process.pid,children})+'\\n');
   }
-  assert.notEqual(children[0],children[1]);
-  appendFileSync(process.env.FM_HOME+'/state/ownership-probes',JSON.stringify({owner:process.pid,children})+'\\n');
  });
  pi.events.on('codex-native:progress', event => appendFileSync(process.env.FM_HOME+'/state/progress-events',JSON.stringify(event)+'\\n'));
 }
@@ -280,6 +308,8 @@ try {
     "first settle",
   );
   assert(fs.existsSync(path.join(state, "ownership-probes")), "real native ownership probe failed: " + child.err);
+  const probed = fs.readFileSync(path.join(state, "ownership-probes"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(probed.map((probe) => probe.executable), codexExecutables, "every real Codex executable was probed: " + child.err);
   assert.equal(fs.readFileSync(path.join(state, ".lock"), "utf8").trim(), String(child.pid));
   assert(
     log().some(
@@ -373,10 +403,12 @@ try {
         piVersion,
         adapterVersion,
         ...(process.env.FM_NATIVE_TEST_KEEP === "1" ? { fixture } : {}),
+        versions: { pi: piVersion, "pi-codex-native": adapterVersion, codex: codexVersions },
         checks: [
           "actual Pi runtime and native package",
           "full startup through real Codex command/exec and shell ownership",
           "native child replacement preserves Pi owner",
+          ...(process.env.FM_NATIVE_CODEX_LAUNCHER ? ["installed npm Codex launcher resolves to the same Pi owner"] : []),
           "native Ultra preserved across operational turns and restart",
           "installed native adapter emits observable output progress",
           "actual FirstMate primary extensions",
