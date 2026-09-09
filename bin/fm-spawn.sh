@@ -1688,10 +1688,9 @@ if [ "$START_DIR_SET" -eq 1 ]; then
   if [ "$(printf '%s' "$START_DIR" | LC_ALL=C tr -d '[:cntrl:]')" != "$START_DIR" ]; then
     echo "error: --start-dir cannot contain control characters" >&2; exit 1
   fi
-  case "$HARNESS:$BACKEND:$KIND:$RAW_LAUNCH" in
-    pi:tmux:ship:0|pi:tmux:scout:0|pi:herdr:ship:0|pi:herdr:scout:0|pi-signed:tmux:ship:0|pi-signed:tmux:scout:0|pi-signed:herdr:ship:0|pi-signed:herdr:scout:0) ;;
-    *) echo "error: --start-dir supports only canonical Pi/Pi-signed ship/scout launches on tmux or herdr (got $HARNESS/$BACKEND/$KIND raw=$RAW_LAUNCH)" >&2; exit 1 ;;
-  esac
+  if [ "$RAW_LAUNCH" -ne 0 ] || ! fm_control_start_dir_axes_supported "$HARNESS" "$BACKEND" "$KIND"; then
+    echo "error: --start-dir supports only canonical Pi/Pi-signed ship/scout launches on tmux or herdr (got $HARNESS/$BACKEND/$KIND raw=$RAW_LAUNCH)" >&2; exit 1
+  fi
 fi
 
 case "$HARNESS" in
@@ -3201,21 +3200,12 @@ fi
 
 START_PATH=
 if [ "$START_DIR_SET" -eq 1 ]; then
-  start_dir_error=
-  if ! START_PATH=$(CDPATH='' cd -- "$WT/$START_DIR" 2>/dev/null && pwd -P); then
-    start_dir_error="--start-dir '$START_DIR' is not an accessible directory in '$WT'"
-  else
-    start_root=$(real_path_or_raw "$WT")
-    case "$START_PATH" in
-      "$start_root"|"$start_root"/*) ;;
-      *) start_dir_error="--start-dir '$START_DIR' physically escapes worktree '$WT'" ;;
-    esac
-  fi
-  if [ -n "$start_dir_error" ]; then
-    echo "error: $start_dir_error" >&2
+  if ! fm_control_start_dir_resolve "$WT" "$START_DIR"; then
+    echo "error: --start-dir $FM_CONTROL_START_DIR_REASON" >&2
     [ "$RELAUNCH" -eq 1 ] || spawn_fresh_allocation_retire || true
     exit 1
   fi
+  START_PATH=$FM_CONTROL_START_DIR_PATH
 fi
 
 # Pre-register Claude's workspace trust for the worktree, at the first point the

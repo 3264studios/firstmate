@@ -1387,6 +1387,117 @@ SH
   pass 'invalid directories and unsupported start-directory axes fail explicitly without task publication; refused fresh allocations are returned only with ownership proof'
 }
 
+# A stateful herdr stand-in for a projected spawn: workspaces and tabs carry
+# focus, `pane get` reports the pane's cwd until the pane is closed and a
+# pane_not_found body afterwards, and every call records who holds the
+# presentation lock at that moment, so lock discipline is observable.
+make_spawn_herdr_statefake() {  # <fakebin> <state-file>
+  local fakebin=$1 state=$2
+  printf '%s\n' '{"next":3,"workspaces":[{"workspace_id":"w1","label":"firstmate","focused":true,"active_tab_id":"w1:t2"}],"tabs":[{"tab_id":"w1:t2","label":"1","workspace_id":"w1","pane_id":"w1:p2","focused":true}]}' > "$state"
+  cat > "$fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+set -u
+STATE=$FM_FAKE_HERDR_STATE
+holder=$(cat "$FM_FAKE_HERDR_LOCK/pid" 2>/dev/null || echo none)
+{ printf 'lock=%s' "$holder"; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$FM_HERDR_LOG"
+jq_state() { jq "$@" "$STATE"; }
+save() { local tmp="$STATE.tmp.$$"; cat > "$tmp" && mv "$tmp" "$STATE"; }
+cmd=${1:-}; sub=${2:-}
+ws=""; label=""
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    --workspace) ws=${args[$((i+1))]:-} ;;
+    --label) label=${args[$((i+1))]:-} ;;
+  esac
+done
+case "$cmd $sub" in
+  "status --json") printf '{"client":{"version":"0.8.2","protocol":20},"server":{"running":true}}\n' ;;
+  "session list") printf '{"sessions":[{"name":"default","running":true,"socket_path":"%s"}]}\n' "$FM_FAKE_HERDR_SOCKET" ;;
+  "workspace list") jq_state '{result:{workspaces:.workspaces}}' ;;
+  "workspace create")
+    n=$(jq_state -r '.next'); wsid="w$n"; tabid="w$n:t$((n + 1))"; paneid="w$n:p$((n + 1))"
+    jq_state --arg wsid "$wsid" --arg wlabel "$label" --arg tabid "$tabid" --arg paneid "$paneid" \
+      '.workspaces += [{workspace_id:$wsid, label:$wlabel, focused:false, active_tab_id:$tabid}]
+       | .tabs += [{tab_id:$tabid, label:"1", workspace_id:$wsid, pane_id:$paneid, focused:true}]
+       | .next += 2' | save
+    jq -n --arg wsid "$wsid" --arg wlabel "$label" --arg tabid "$tabid" --arg paneid "$paneid" \
+      '{result:{workspace:{workspace_id:$wsid,label:$wlabel},tab:{tab_id:$tabid},root_pane:{pane_id:$paneid}}}' ;;
+  "tab list") jq_state --arg w "$ws" '{result:{tabs:[.tabs[]|select(.workspace_id==$w)]}}' ;;
+  "tab create")
+    n=$(jq_state -r '.next'); tabid="$ws:t$n"; paneid="$ws:p$n"
+    jq_state --arg w "$ws" --arg wlabel "$label" --arg tabid "$tabid" --arg paneid "$paneid" \
+      '.tabs += [{tab_id:$tabid, label:$wlabel, workspace_id:$w, pane_id:$paneid, focused:false}] | .next += 1' | save
+    jq -n --arg tabid "$tabid" --arg paneid "$paneid" '{result:{tab:{tab_id:$tabid},root_pane:{pane_id:$paneid}}}' ;;
+  "pane list") jq_state --arg w "$ws" '{result:{panes:[.tabs[]|select(.workspace_id==$w)|{pane_id:.pane_id, tab_id:.tab_id}]}}' ;;
+  "pane get")
+    pane=${3:-}
+    row=$(jq_state -c --arg p "$pane" '[.tabs[]|select(.pane_id==$p)][0] // empty')
+    if [ -n "$row" ]; then
+      printf '%s' "$row" | jq --arg cwd "$FM_FAKE_HERDR_CWD" '{result:{pane:{pane_id:.pane_id, tab_id:.tab_id, workspace_id:.workspace_id, foreground_cwd:$cwd}}}'
+    else
+      jq -n --arg p "$pane" '{error:{code:"pane_not_found",message:("pane " + $p + " not found")}}'
+      exit 1
+    fi ;;
+  "pane close")
+    pane=${3:-}
+    jq_state --arg p "$pane" '.tabs |= [.[]|select(.pane_id != $p)]' | save ;;
+  "agent get") printf '{"error":{"code":"agent_not_found","message":"no agent"}}\n' ;;
+  "pane process-info") printf '{"result":{"type":"unavailable"}}\n' ;;
+  *) : ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/herdr"
+}
+
+# On projected Herdr the refused launch's pane belongs to the armed abort
+# cleanup, which closes it under the presentation lock this process holds from
+# projection until exit. Closing it directly would re-enter that lock and
+# release it before the cleanup ran.
+test_start_directory_refusal_on_projected_herdr_keeps_the_presentation_lock() {
+  local rec out sock_real key lock proj_real state log
+  rec=$(make_spawn_case start-herdr pi refused)
+  read_case_record "$rec"
+  arm_retire_log
+  mkdir -p "$HOME_DIR/config"
+  printf 'on\n' > "$HOME_DIR/config/herdr-presentation-spaces"
+  state="$CASE_DIR/herdr-state.json"
+  log="$CASE_DIR/herdr.log"
+  : > "$log"
+  make_spawn_herdr_statefake "$FAKEBIN_DIR" "$state"
+  sock_real="$(cd "$CASE_DIR" && pwd -P)/herdr.sock"
+  key=$(printf '%s\0%s' default "$sock_real" | shasum -a 256 | awk '{print $1}')
+  lock="/tmp/firstmate-herdr-presentation/order-${key:0:32}.lock"
+  proj_real=$(cd "$PROJ_DIR" && pwd -P)
+  out=$(
+    unset HERDR_ENV HERDR_PANE_ID HERDR_TAB_ID HERDR_WORKSPACE_ID HERDR_SOCKET_PATH HERDR_SESSION
+    export FM_FAKE_HERDR_STATE="$state" FM_HERDR_LOG="$log" FM_FAKE_HERDR_LOCK="$lock" \
+      FM_FAKE_HERDR_SOCKET="$CASE_DIR/herdr.sock" FM_FAKE_HERDR_CWD="$WT_DIR"
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --backend herdr --start-dir=missing
+  )
+  expect_code 1 "$?" "projected herdr start-directory refusal did not fail: $out"
+  assert_contains "$out" 'not an accessible directory' 'directory refusal is unexplained on projected herdr'
+  assert_contains "$out" "returned pooled worktree '$WT_DIR'; projected herdr pane default:w3:p5 is closed by this launch's abort cleanup" \
+    'projected refusal did not defer its pane to the abort cleanup'
+  assert_grep "treehouse return --force $WT_DIR in $proj_real" "$RETIRE_LOG" 'projected refusal did not return the slot from the project'
+  [ ! -f "$HOME_DIR/state/refused.meta" ] || fail 'projected refusal published metadata'
+  assert_grep $'\x1f''pane'$'\x1f''run'$'\x1f''w3:p5'$'\x1f''treehouse get' "$log" 'the projected task pane never received treehouse get'
+  [ "$(grep -c $'\x1f''pane'$'\x1f''close'$'\x1f''w3:p5'$'\x1f' "$log")" = 1 ] || fail "the task pane was not closed exactly once:"$'\n'"$(cat "$log")"
+  jq -e '[.tabs[] | select(.workspace_id == "w3")] | length == 0' "$state" >/dev/null || fail 'the projected workspace still holds panes after cleanup'
+  # From the moment the lock is first seen held, every later herdr call up to
+  # the last one must still see the same holder: the lock is released only
+  # after the abort cleanup finished.
+  awk -F"$(printf '\037')" '
+    { split($1, kv, "="); holder = kv[2] }
+    holder != "none" && first == "" { first = holder }
+    first != "" && holder != first { bad = NR }
+    END { if (first == "") { print "lock never held"; exit 1 } if (bad) { print "lock released before herdr call " bad; exit 1 } }
+  ' "$log" || fail "presentation lock was not held through the abort cleanup:"$'\n'"$(cat "$log")"
+  [ ! -e "$lock" ] && [ ! -L "$lock" ] || fail 'presentation lock was left held after exit'
+  pass 'a projected herdr start-directory refusal returns its slot and leaves its pane to the locked abort cleanup'
+}
+
 
 test_start_directory_root_batch_and_retarget() {
   local rec out launch id
@@ -1429,6 +1540,7 @@ test_start_directory_root_batch_and_retarget
 
 test_pi_start_directory_contract
 test_start_directory_refusals
+test_start_directory_refusal_on_projected_herdr_keeps_the_presentation_lock
 
 test_worker_launch_delivers_role_scope
 test_no_profile_keeps_claude_profile_defaults

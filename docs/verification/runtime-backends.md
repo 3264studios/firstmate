@@ -1578,7 +1578,9 @@ bin/fm-test-run.sh tests/fm-spawn-dispatch-profile.test.sh
 ok - explicit root and batch startup work; a launch-time symlink retarget refuses before harness execution
 ok - Pi/Pi-signed nested startup executes in contained cwd, preserves root shell and metadata through relaunch, and never starts without its directory
 ok - invalid directories and unsupported start-directory axes fail explicitly without task publication; refused fresh allocations are returned only with ownership proof
+ok - a projected herdr start-directory refusal returns its slot and leaves its pane to the locked abort cleanup
 ```
 
-Those portable cases execute the delivered shell command against an argv/cwd capture executable; they do not claim a live Pi-signed or tmux model run.
+Those portable cases execute the delivered shell command against an argv/cwd capture executable and drive a projected Herdr spawn against a stateful fake CLI; they do not claim a live Pi-signed, tmux, or Herdr model run.
+`tests/fm-control-relaunch.test.sh` proves a relaunch refuses a missing, escaping, or unsupported recorded start directory before the running worker is sent anything.
 The supported startup-directory contract and explicit unsupported-axis refusals are owned by `bin/fm-spawn.sh --help`.
