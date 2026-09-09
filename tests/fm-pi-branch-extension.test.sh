@@ -2861,6 +2861,52 @@ if (
 ) {
   throw new Error(`post-clear resolution failure was not reported honestly: ${JSON.stringify(clearFailureNotices)}`);
 }
+
+// Under a codex-native main, Follow main reports the ordinary openai-codex
+// model the next build actually runs, and the picker never offers the main
+// native provider itself.
+registryModels.push({ provider: "codex-native", id: "gpt-6-astra" }, { provider: "openai-codex", id: "gpt-6-astra" });
+const nativeCtx = makeCtx({ model: { provider: "codex-native", id: "gpt-6-astra" } });
+const nativePromptCount = uiPrompts.length;
+const nativeNoticeCount = notices.length;
+uiSelections.push("Follow main (codex-native/gpt-6-astra)");
+await command.handler("", nativeCtx);
+const nativeOffer = uiPrompts[nativePromptCount];
+if (nativeOffer.options[0] !== "Follow main (codex-native/gpt-6-astra)" || nativeOffer.options.includes("codex-native/gpt-6-astra")) {
+  throw new Error(`the picker must offer following a native main without offering its native provider: ${JSON.stringify(nativeOffer.options)}`);
+}
+const nativeNotices = notices.slice(nativeNoticeCount);
+if (nativeNotices.length !== 1 || nativeNotices[0].type !== "info" || !nativeNotices[0].message.includes("openai-codex/gpt-6-astra")) {
+  throw new Error(`following a native main did not report the ordinary Pi model the build uses: ${JSON.stringify(nativeNotices)}`);
+}
+dispatch("signal: native follow");
+await settle(() => (globalThis.__fmSessions ?? []).length === 6, "native-main follow build");
+const nativeFollowed = globalThis.__fmSessions[5].options.model;
+if (nativeFollowed?.provider !== "openai-codex" || nativeFollowed?.id !== "gpt-6-astra") {
+  throw new Error(`the build did not run the model the picker reported: ${JSON.stringify(nativeFollowed)}`);
+}
+
+// When that ordinary model is unavailable, the picker reports the refusal the
+// next build enforces instead of claiming the branch keeps a recorded model.
+registryModels.splice(registryModels.findIndex((model) => model.provider === "openai-codex" && model.id === "gpt-6-astra"), 1);
+const refusalNoticeCount = notices.length;
+uiSelections.push("Follow main (codex-native/gpt-6-astra)");
+await command.handler("", nativeCtx);
+const refusalNotices = notices.slice(refusalNoticeCount);
+if (
+  refusalNotices.length !== 1 ||
+  refusalNotices[0].type !== "warning" ||
+  !refusalNotices[0].message.includes("refuses to build") ||
+  refusalNotices[0].message.includes("keeps the model its own session recorded")
+) {
+  throw new Error(`following an unavailable native main did not report the build refusal: ${JSON.stringify(refusalNotices)}`);
+}
+const refusedOffer = dispatch("signal: native follow refused");
+const refusal = await refusedOffer.settlement.then(() => null, (error) => error);
+if (!(refusal instanceof Error) || !refusal.message.includes("refuses to build")) {
+  throw new Error(`the build did not refuse as the picker reported: ${String(refusal)}`);
+}
+if (globalThis.__fmSessions.length !== 6) throw new Error("a refused native follow still built a branch");
 process.exit(0);
 EOF
   status=$?

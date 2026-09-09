@@ -235,6 +235,9 @@ type BranchModel = NonNullable<ReturnType<ModelRuntime["getModel"]>>;
 type BranchEffort = ReturnType<NonNullable<ExtensionAPI["getThinkingLevel"]>>;
 type PinnedBranchModel = { model: BranchModel; modelRuntime: ModelRuntime };
 type BranchModelResolution = { ok: true; selection: PinnedBranchModel } | { ok: false; reason: string };
+type FollowMainResolution =
+  | { ok: true; selection: PinnedBranchModel }
+  | { ok: false; reason: string; refusesBuild: boolean };
 
 // Pi owns the effort vocabulary. The picker's options and every clamp still
 // come from Pi's own getSupportedThinkingLevels/clampThinkingLevel, so this
@@ -783,36 +786,50 @@ export default function (pi: ExtensionAPI) {
     return resolved.selection;
   }
 
+  // "Follow main" is ONE rule, shared by every unpinned branch build and by
+  // the /supervision-model report, so the report describes exactly what the
+  // next build does. An ordinary Pi provider is applied as main's own model;
+  // when the isolated runtime cannot run it, the build passes no override at
+  // all (refusesBuild false). A native provider owns a persistent main
+  // thread, so the branch instead selects the same model through Pi's
+  // independent openai-codex provider, and when that model is unavailable the
+  // build refuses (refusesBuild true) rather than inheriting the native
+  // thread or silently restoring a recorded native selection.
+  async function followMainModel(main: { provider: string; id: string }): Promise<FollowMainResolution> {
+    const native = main.provider === "codex-native";
+    let resolved: BranchModelResolution;
+    try {
+      resolved = await resolveBranchModel(native ? "openai-codex" : main.provider, main.id);
+    } catch (error) {
+      resolved = { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+    if (resolved.ok) return resolved;
+    if (!native) return { ...resolved, refusesBuild: false };
+    return {
+      ok: false,
+      refusesBuild: true,
+      reason: `native main requires an independent Pi supervision model and ${resolved.reason}; the branch refuses to build until one is pinned with /supervision-model`,
+    };
+  }
+
   // The pin file's CURRENT state decides the model on every branch build,
   // create and reopen alike, and it overrides Pi's restore of whatever model
   // a reopened branch session recorded. With a pin, that model. With no pin,
-  // main's own model is applied EXPLICITLY - otherwise clearing the pin would
-  // report that the branch follows main while the reopened session quietly
-  // restored the model an earlier pin left behind. Only when main's model is
-  // genuinely unknown, or the isolated runtime cannot run it, does the build
+  // main's own model is applied EXPLICITLY through followMainModel -
+  // otherwise clearing the pin would report that the branch follows main
+  // while the reopened session quietly restored the model an earlier pin left
+  // behind. Only when main's model is genuinely unknown, or the follow rule
+  // says the isolated runtime cannot run an ordinary provider, does the build
   // fall back to passing no override at all, which is the pre-feature
-  // behavior for ordinary Pi providers. Native main sessions require the
-  // explicit independent provider selection below.
+  // behavior.
   async function branchModelSelection(): Promise<PinnedBranchModel | undefined> {
     const pin = readModelPin();
     if (pin) return preparePinnedBranchModel(pin);
     if (!mainModel) return undefined;
-    // Native providers own a persistent main thread. The isolated supervision
-    // session must explicitly use Pi's independent agent loop, never inherit
-    // that provider or silently restore a recorded native selection.
-    if (mainModel.provider === "codex-native") {
-      const resolved = await resolveBranchModel("openai-codex", mainModel.id);
-      if (!resolved.ok) {
-        throw new Error(`native main requires an independent Pi supervision model: ${resolved.reason}; choose one with /supervision-model`);
-      }
-      return resolved.selection;
-    }
-    try {
-      const resolved = await resolveBranchModel(mainModel.provider, mainModel.id);
-      return resolved.ok ? resolved.selection : undefined;
-    } catch {
-      return undefined;
-    }
+    const following = await followMainModel(mainModel);
+    if (following.ok) return following.selection;
+    if (following.refusesBuild) throw new Error(following.reason);
+    return undefined;
   }
 
   async function effectiveBranchModel(selected: BranchModel | undefined): Promise<BranchModel | undefined> {
@@ -1773,23 +1790,22 @@ ${context.command}
         modelReport = { message: `Supervision branch model: ${picked}.`, warning: false };
       } else {
         // Clearing the pin only follows main if main's model can actually be
-        // applied to the branch; say what will really happen rather than
-        // reporting a state that did not take effect.
-        try {
-          const following = mainModel ? await resolveBranchModel(mainModel.provider, mainModel.id) : null;
-          if (following?.ok) branchModel = following.selection.model;
-          modelReport = following?.ok
-            ? {
-                message: `Supervision branch follows main's model (${modelLabel(following.selection.model)}).`,
-                warning: false,
-              }
-            : {
-                message: `Supervision branch pin cleared, but main's model could not be applied (${following ? following.reason : "main's model is not known yet"}); the branch keeps the model its own session recorded until that conversation is replaced.`,
-                warning: true,
-              };
-        } catch (error) {
+        // applied to the branch; the same followMainModel rule the next build
+        // runs says what will really happen rather than reporting a state
+        // that did not take effect.
+        const following = mainModel ? await followMainModel(mainModel) : null;
+        if (following?.ok) {
+          branchModel = following.selection.model;
           modelReport = {
-            message: `Supervision branch pin cleared, but main's model could not be applied (${error instanceof Error ? error.message : String(error)}); the branch keeps the model its own session recorded until that conversation is replaced.`,
+            message: `Supervision branch follows main's model (${modelLabel(following.selection.model)}).`,
+            warning: false,
+          };
+        } else {
+          const consequence = following?.refusesBuild
+            ? ""
+            : "; the branch keeps the model its own session recorded until that conversation is replaced";
+          modelReport = {
+            message: `Supervision branch pin cleared, but main's model could not be applied (${following ? following.reason : "main's model is not known yet"})${consequence}.`,
             warning: true,
           };
         }
