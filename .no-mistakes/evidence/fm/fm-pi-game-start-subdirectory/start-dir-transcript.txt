@@ -1,0 +1,151 @@
+worktree root: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+project:       /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/project
+
+$ fm-spawn.sh demo <project> --mode no-mistakes --yolo off --harness pi --model codex-native/gpt-6-astra --effort high --start-dir games/demo
+warning: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/home/data/demo/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned demo harness=pi kind=ship mode=no-mistakes yolo=off window=firstmate:fm-demo worktree=/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+exit=0
+persisted task record (state/demo.meta, lifecycle-relevant fields):
+  worktree=/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+  start_dir=games/demo
+  harness=pi
+  kind=ship
+  model=codex-native/gpt-6-astra
+  effort=high
+  spawn_gen=s1788979181.38320.9916
+delivered launch command (tail of the fake tmux send-keys log):
+  (CDPATH='' cd -- '/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt/games/demo' && [ "$(pwd -P)" = '/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt/games/demo' ] || { echo 'error: start directory changed before launch' >&2; exit 1; }; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI FM_PI_HARNESS=pi '/private/var/f
+executing it from the worktree root:
+  [fake pi] started in: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt/games/demo
+  [fake pi] argv: --tui-mode regular --model codex-native/gpt-6-astra --thinking high -e /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/home/state/demo.pi-ext.ts ⁣FIRSTMATE_OP: v1 launch-brief: # Task
+  ## Captain's intent
+  brief for demo
+  
+  ## Firstmate spec
+  Exercise the spawn behavior under test.
+  
+  # Current worker role contract
+  When this task works on Firstmate itself, this section supersedes every earlier brief instruction about your role and identity.
+  When this task works on Firstmate itself, the repository root `AGENTS.md` (also imported by `CLAUDE.md`) is the primary/secondmate supervisor's contract: follow this brief instead of that supervisor contract.
+  For that Firstmate task, do the assigned work yourself and report to firstmate; do not adopt the supervisor identity, delegate the task, run fleet supervision, or address the captain.
+  This exception preserves this brief's safety and authority boundaries and applicable contributor guidance, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
+  Other projects retain their own instructions unchanged.
+  
+  # Current no-mistakes intent contract
+  This section supersedes every earlier brief instruction about constructing `--intent`, but not later clarifications actually supplied by the captain.
+  Use the serialized captain intent below plus any later words the captain actually supplied as `--intent`; never include Firstmate specification or other mixed Task content.
+  
+  ## Captain intent authorized for --intent
+  brief for demo
+  
+  Firstmate-authored constraints, acceptance criteria, implementation details, decisions, and tradeoffs are specification, not captain intent.
+  The Definition of done's rule that `--intent` must be self-sufficient still governs the string you pass: resolve any report, decision, or PR the intent above refers to into its substance rather than passing the pointer.
+  [endpoint shell] still in: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+
+$ fm-spawn.sh demo --relaunch   (ordinary recovery: recorded start_dir is reused)
+warning: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/home/data/demo/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned demo harness=pi kind=ship mode=no-mistakes yolo=off window=firstmate:fm-demo worktree=/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+exit=0
+  worktree=/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+  start_dir=games/demo
+  spawn_gen=s1788979184.40999.26091
+delivered launch command (tail of the fake tmux send-keys log):
+  (CDPATH='' cd -- '/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt/games/demo' && [ "$(pwd -P)" = '/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt/games/demo' ] || { echo 'error: start directory changed before launch' >&2; exit 1; }; unset TRACEPARENT; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI FM_PI_HARNESS
+executing it from the worktree root:
+  [fake pi] started in: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt/games/demo
+  [fake pi] argv: --tui-mode regular -e /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/home/state/demo.pi-ext.ts ⁣FIRSTMATE_OP: v1 launch-brief: # Task
+  ## Captain's intent
+  brief for demo
+  
+  ## Firstmate spec
+  Exercise the spawn behavior under test.
+  
+  # Current worker role contract
+  When this task works on Firstmate itself, this section supersedes every earlier brief instruction about your role and identity.
+  When this task works on Firstmate itself, the repository root `AGENTS.md` (also imported by `CLAUDE.md`) is the primary/secondmate supervisor's contract: follow this brief instead of that supervisor contract.
+  For that Firstmate task, do the assigned work yourself and report to firstmate; do not adopt the supervisor identity, delegate the task, run fleet supervision, or address the captain.
+  This exception preserves this brief's safety and authority boundaries and applicable contributor guidance, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
+  Other projects retain their own instructions unchanged.
+  
+  # Current no-mistakes intent contract
+  This section supersedes every earlier brief instruction about constructing `--intent`, but not later clarifications actually supplied by the captain.
+  Use the serialized captain intent below plus any later words the captain actually supplied as `--intent`; never include Firstmate specification or other mixed Task content.
+  
+  ## Captain intent authorized for --intent
+  brief for demo
+  
+  Firstmate-authored constraints, acceptance criteria, implementation details, decisions, and tradeoffs are specification, not captain intent.
+  The Definition of done's rule that `--intent` must be self-sufficient still governs the string you pass: resolve any report, decision, or PR the intent above refers to into its substance rather than passing the pointer.
+  [endpoint shell] still in: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+
+$ fm-spawn.sh demo --relaunch --start-dir games/other   (override refused)
+error: --relaunch reuses recorded start_dir; --start-dir cannot override it
+exit=1
+
+$ fm-spawn.sh demo --relaunch --harness codex   (unsupported profile switch refused, record untouched)
+error: --start-dir supports only canonical Pi/Pi-signed ship/scout launches on tmux or herdr (got codex/tmux/ship raw=0)
+exit=1
+  worktree=/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+  start_dir=games/demo
+  harness=pi
+
+$ mv games/demo games/renamed; then run the previously delivered launch command (launch-time guard)
+delivered launch command (tail of the fake tmux send-keys log):
+  (CDPATH='' cd -- '/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt/games/demo' && [ "$(pwd -P)" = '/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt/games/demo' ] || { echo 'error: start directory changed before launch' >&2; exit 1; }; unset TRACEPARENT; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI FM_PI_HARNESS
+executing it from the worktree root:
+  sh: line 0: cd: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt/games/demo: No such file or directory
+  error: start directory changed before launch
+  [endpoint shell] still in: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+
+$ fm-spawn.sh typo <project> --mode no-mistakes --yolo off --harness pi --start-dir games/dmeo   (typo: refused after allocation, fresh slot retired)
+warning: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/home/data/typo/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+error: --start-dir 'games/dmeo' is not an accessible directory in '/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt'
+returned pooled worktree '/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt' and asked tmux to close window firstmate:fm-typo
+exit=1
+backend calls made by the refusal:
+  [backend] treehouse return --force /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt (cwd /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/project)
+  [backend] tmux kill-window -t =firstmate:=fm-typo
+task record published: no
+
+$ fm-spawn.sh codex <project> --mode no-mistakes --yolo off --harness codex --start-dir games/demo   (unsupported harness refused)
+error: --start-dir supports only canonical Pi/Pi-signed ship/scout launches on tmux or herdr (got codex/tmux/ship raw=0)
+exit=1
+
+$ fm-spawn.sh codex <project> --mode no-mistakes --yolo off --harness pi --start-dir ../outside   (escape refused before any allocation)
+error: --start-dir must be a non-empty contained relative directory without .. components
+exit=1
+backend calls made: 0
+
+$ fm-spawn.sh codex <project> --mode no-mistakes --yolo off --harness pi   (no --start-dir: legacy root startup unchanged)
+warning: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/home/data/codex/launch-brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned codex harness=pi kind=ship mode=no-mistakes yolo=off window=firstmate:fm-codex worktree=/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+exit=0
+  start_dir lines in record: 0
+delivered launch command (tail of the fake tmux send-keys log):
+  env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI FM_PI_HARNESS=pi '/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/fake/fakebin/pi' --tui-mode regular -e '/private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/home/state/codex.pi-ext.ts' "$('/Users/talon/.no-mistakes/worktrees/9b0bfac143a1/01M23JQ22SS4ANTRDY96QCYQXX/bin/fm-op
+executing it from the worktree root:
+  [fake pi] started in: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
+  [fake pi] argv: --tui-mode regular -e /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/home/state/codex.pi-ext.ts ⁣FIRSTMATE_OP: v1 launch-brief: # Task
+  ## Captain's intent
+  brief for codex
+  
+  ## Firstmate spec
+  Exercise the spawn behavior under test.
+  
+  # Current worker role contract
+  When this task works on Firstmate itself, this section supersedes every earlier brief instruction about your role and identity.
+  When this task works on Firstmate itself, the repository root `AGENTS.md` (also imported by `CLAUDE.md`) is the primary/secondmate supervisor's contract: follow this brief instead of that supervisor contract.
+  For that Firstmate task, do the assigned work yourself and report to firstmate; do not adopt the supervisor identity, delegate the task, run fleet supervision, or address the captain.
+  This exception preserves this brief's safety and authority boundaries and applicable contributor guidance, including `CONTRIBUTING.md` and `firstmate-coding-guidelines` for Firstmate changes.
+  Other projects retain their own instructions unchanged.
+  
+  # Current no-mistakes intent contract
+  This section supersedes every earlier brief instruction about constructing `--intent`, but not later clarifications actually supplied by the captain.
+  Use the serialized captain intent below plus any later words the captain actually supplied as `--intent`; never include Firstmate specification or other mixed Task content.
+  
+  ## Captain intent authorized for --intent
+  brief for codex
+  
+  Firstmate-authored constraints, acceptance criteria, implementation details, decisions, and tradeoffs are specification, not captain intent.
+  The Definition of done's rule that `--intent` must be self-sufficient still governs the string you pass: resolve any report, decision, or PR the intent above refers to into its substance rather than passing the pointer.
+  [endpoint shell] still in: /private/var/folders/b_/gcsh88fj13qf8fwdsns47b9c0000gn/T/start-dir-demo.bYsfTW/demo/wt
