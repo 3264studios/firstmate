@@ -34,9 +34,12 @@
 #   allocation/refresh and physically resolve inside that root (symlinks may
 #   not escape). start_dir= in metadata preserves the relative choice; absence
 #   keeps legacy root startup. Relaunch revalidates it and refuses overrides.
-#   A fresh launch refused after its slot was allocated returns that still-clean
-#   slot and closes its new endpoint; a relaunch refusal leaves the recorded
-#   endpoint and worktree untouched.
+#   A fresh launch refused after its slot was allocated returns that slot and
+#   closes its new endpoint only with proof the slot is its own and untouched:
+#   the endpoint still sits in it, HEAD is still the origin base it was reset
+#   to, and the tree is clean. Otherwise both stay in place with the remedy
+#   named. A relaunch refusal leaves the recorded endpoint and worktree
+#   untouched.
 #   Only the harness runs in a subshell at that directory; its exit returns to
 #   the unchanged root shell. Allocation, hooks, ownership, and teardown still
 #   use worktree=. A launch-time physical-path check refuses directory retargeting.
@@ -889,6 +892,7 @@ SPAWN_META_LOCK=
 SPAWN_META_LOCK_HELD=0
 SPAWN_META_PUBLISH_STARTED=0
 SPAWN_FRESH_COMMIT_PENDING=0
+SPAWN_FRESH_BASE_COMMIT=
 SPAWN_TASK_SET_LOCK=
 SPAWN_TASK_SET_LOCK_HELD=0
 SPAWN_TREEHOUSE_PROJECT_LOCK=
@@ -2519,6 +2523,7 @@ freshen_spawn_worktree_base() {  # <worktree>
     echo "error: pooled worktree '$worktree' is at '${actual:-unknown}', not current '$target' ('$expected'); refusing to launch" >&2
     return 1
   fi
+  SPAWN_FRESH_BASE_COMMIT=$expected
 }
 
 herdr_projection_meta_field_exact() {  # <meta> <key>
@@ -3070,13 +3075,32 @@ spawn_endpoint_cleanup() {
 
 # A fresh launch refused after `treehouse get` already allocated its slot owns
 # exactly two things nothing else will ever find: the endpoint this process
-# created and the slot it just proved clean and reset. Only those are retired,
-# and the slot is rechecked first so work that appeared in between is never
-# discarded; anything less certain is left in place with the remedy named.
+# created and the slot it just reset to origin's default branch. Retiring them
+# needs positive proof, taken now, that both are still exactly that - the
+# endpoint sitting in the slot, HEAD at the recorded base, a clean tree - so a
+# slot that was never reset, gained work, or is no longer this endpoint's is
+# left in place with the remedy named. A projected Herdr pane is not closed
+# here: the armed abort cleanup closes it under the presentation lock this
+# process still holds, and taking that lock again from here would release it
+# before the cleanup ran.
 spawn_fresh_allocation_retire() {
-  local status out
+  local status head seen out
+  if [ -z "$SPAWN_FRESH_BASE_COMMIT" ]; then
+    echo "error: pooled worktree '$WT' was never reset to an origin base, so its commits cannot be proven landed; leaving it and window $T in place (inspect it, then return it with: cd '$PROJ_ABS' && treehouse return --force '$WT')" >&2
+    return 1
+  fi
+  head=$(git -C "$WT" rev-parse --verify --quiet HEAD 2>/dev/null || true)
+  if [ "$head" != "$SPAWN_FRESH_BASE_COMMIT" ]; then
+    echo "error: pooled worktree '$WT' is at '${head:-unknown}', not the base '$SPAWN_FRESH_BASE_COMMIT' it was reset to; leaving it and window $T in place for inspection" >&2
+    return 1
+  fi
   if ! status=$(git -C "$WT" -c core.quotePath=false status --porcelain 2>/dev/null) || [ -n "$status" ]; then
     echo "error: pooled worktree '$WT' can no longer be proven clean; leaving it and window $T in place for inspection" >&2
+    return 1
+  fi
+  seen=$(spawn_current_path "$WT_TARGET" || true)
+  if [ -z "$seen" ] || [ "$(real_path_or_raw "$seen")" != "$(real_path_or_raw "$WT")" ]; then
+    echo "error: window $T is in '${seen:-unknown}', not pooled worktree '$WT', so that slot cannot be proven this launch's own; leaving both in place for inspection" >&2
     return 1
   fi
   if ! out=$( (cd "$PROJ_ABS" && treehouse return --force "$WT") 2>&1 ); then
@@ -3084,8 +3108,12 @@ spawn_fresh_allocation_retire() {
     echo "error: could not return pooled worktree '$WT'; leaving it and window $T in place (return it with: cd '$PROJ_ABS' && treehouse return --force '$WT')" >&2
     return 1
   fi
-  spawn_endpoint_cleanup
-  echo "returned pooled worktree '$WT' and closed window $T" >&2
+  if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ]; then
+    echo "returned pooled worktree '$WT'; projected herdr pane $T is closed by this launch's abort cleanup" >&2
+  else
+    spawn_endpoint_cleanup
+    echo "returned pooled worktree '$WT' and asked $BACKEND to close window $T" >&2
+  fi
 }
 
 if [ "$RELAUNCH" -eq 1 ]; then

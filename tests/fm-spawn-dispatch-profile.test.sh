@@ -1213,6 +1213,14 @@ arm_retire_log() {
   cat > "$FAKEBIN_DIR/tmux" <<'SH'
 #!/bin/bash
 [ "${1:-}" != kill-window ] || printf 'tmux %s\n' "$*" >> "$FM_RETIRE_LOG"
+if [ -n "${FM_FAKE_PANE_DRIFT:-}" ]; then
+  case "$*" in
+    *'#{pane_current_path}'*)
+      n=$(( $(cat "$FM_RETIRE_LOG.reads" 2>/dev/null || echo 0) + 1 ))
+      echo "$n" > "$FM_RETIRE_LOG.reads"
+      if [ "$n" -gt "$FM_FAKE_PANE_DRIFT_AFTER" ]; then printf '%s\n' "$FM_FAKE_PANE_DRIFT"; exit 0; fi ;;
+  esac
+fi
 exec "$(dirname "$0")/tmux-unlogged" "$@"
 SH
   cat > "$FAKEBIN_DIR/treehouse" <<'SH'
@@ -1320,11 +1328,23 @@ test_start_directory_refusals() {
     expect_code 1 "$?" "invalid directory was accepted: $value: $out"
     assert_contains "$out" '--start-dir' "directory refusal is unexplained"
     [ ! -f "$HOME_DIR/state/refused.meta" ] || fail "invalid directory published metadata"
-    assert_contains "$out" "returned pooled worktree '$WT_DIR'" "post-allocation refusal did not report retiring its slot"
+    assert_contains "$out" "returned pooled worktree '$WT_DIR' and asked tmux to close window" "post-allocation refusal did not report retiring its slot"
     assert_grep "treehouse return --force $WT_DIR in $proj_real" "$RETIRE_LOG" "allocated slot was not returned from the project for $value"
     assert_grep 'kill-window' "$RETIRE_LOG" "new window was not closed for $value"
     assert_grep 'fm-refused' "$RETIRE_LOG" "a window other than the refused launch's own was closed for $value"
   done
+  # Ownership is proven at retirement time, not assumed: an endpoint that no
+  # longer sits in the slot after the two discovery reads means the slot is
+  # not provably this launch's own, so nothing is returned or closed.
+  : > "$RETIRE_LOG"
+  out=$(FM_FAKE_PANE_DRIFT="$CASE_DIR/outside" FM_FAKE_PANE_DRIFT_AFTER=2 \
+    run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --start-dir=missing)
+  expect_code 1 "$?" "drifted endpoint refusal did not fail: $out"
+  assert_contains "$out" 'not an accessible directory' 'directory refusal is unexplained after endpoint drift'
+  assert_contains "$out" "cannot be proven this launch's own" 'drifted endpoint was not named as the reason to keep the slot'
+  [ ! -s "$RETIRE_LOG" ] || fail "unproven slot was retired after endpoint drift: $(cat "$RETIRE_LOG")"
+  [ ! -f "$HOME_DIR/state/refused.meta" ] || fail "drifted refusal published metadata"
+  rm -f "$RETIRE_LOG.reads"
   cat > "$FAKEBIN_DIR/orca" <<'SH'
 #!/bin/sh
 printf '%s\n' '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}'
@@ -1350,7 +1370,21 @@ SH
   expect_code 1 "$?" "secondmate accepted start directory: $out"
   assert_contains "$out" 'not secondmates' 'secondmate refusal missing'
   [ ! -f "$HOME_DIR/state/refused.meta" ] || fail "an unsupported axis published metadata"
-  pass 'invalid directories and unsupported start-directory axes fail explicitly without task publication; refused fresh allocations are returned'
+  # Without an origin the slot is never reset to a base, so a clean tree still
+  # cannot prove its commits landed; the refusal keeps slot and window and
+  # names the manual return.
+  git -C "$PROJ_DIR" remote remove origin
+  git -C "$WT_DIR" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' commit -q --allow-empty -m unlanded
+  : > "$RETIRE_LOG"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" refused "$PROJ_DIR" --start-dir=missing)
+  expect_code 1 "$?" "origin-less refusal did not fail: $out"
+  assert_contains "$out" 'not an accessible directory' 'directory refusal is unexplained for an origin-less slot'
+  assert_contains "$out" 'cannot be proven landed' 'origin-less slot was not named as unprovable'
+  assert_contains "$out" "treehouse return --force '$WT_DIR'" 'origin-less refusal did not name the manual return'
+  [ ! -s "$RETIRE_LOG" ] || fail "origin-less slot with an unlanded commit was retired: $(cat "$RETIRE_LOG")"
+  [ ! -f "$HOME_DIR/state/refused.meta" ] || fail "origin-less refusal published metadata"
+  [ "$(git -C "$WT_DIR" log -1 --format=%s)" = unlanded ] || fail 'origin-less refusal discarded the unlanded commit'
+  pass 'invalid directories and unsupported start-directory axes fail explicitly without task publication; refused fresh allocations are returned only with ownership proof'
 }
 
 
