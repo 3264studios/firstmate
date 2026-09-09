@@ -1,0 +1,45 @@
+Pi-named parent pid 59854 (/tmp/fm-native-demo.0n6e6z/pi)
+=== ChatGPT.app codex, first child | codex child pid 59855 | command/exec exit 0
+--- process ancestry as seen by the shell check (innermost first)
+59866 59855 bash bash /tmp/fm-native-demo.0n6e6z/probe.sh
+59855 59854 /Applications/Ch /Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --stdio
+59854 59844 /tmp/fm-native-d /tmp/fm-native-demo.0n6e6z/pi /tmp/fm-native-demo.0n6e6z/demo.mjs
+--- fm-lock.sh (acquire)
+lock acquired: harness pid 59854
+exit=0
+fm_session_lock_owned_by_self: OWNED
+state/.lock = 59854   (expected Pi pid 59854)
+=== ChatGPT.app codex, replacement child | codex child pid 60011 | command/exec exit 0
+--- process ancestry as seen by the shell check (innermost first)
+60022 60011 bash bash /tmp/fm-native-demo.0n6e6z/probe.sh
+60011 59854 /Applications/Ch /Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --stdio
+59854 59844 /tmp/fm-native-d /tmp/fm-native-demo.0n6e6z/pi /tmp/fm-native-demo.0n6e6z/demo.mjs
+--- fm-lock.sh (acquire)
+lock acquired: harness pid 59854
+exit=0
+fm_session_lock_owned_by_self: OWNED
+state/.lock = 59854   (expected Pi pid 59854)
+=== npm launcher codex, first child | codex child pid 60140 | command/exec exit 0
+--- process ancestry as seen by the shell check (innermost first)
+60153 60141 bash bash /tmp/fm-native-demo.0n6e6z/probe.sh
+60141 60140 /opt/homebrew/li <npm vendor codex> app-server --stdio
+60140 59854 node node /opt/homebrew/bin/codex app-server --stdio
+59854 59844 /tmp/fm-native-d /tmp/fm-native-demo.0n6e6z/pi /tmp/fm-native-demo.0n6e6z/demo.mjs
+--- fm-lock.sh (acquire)
+lock acquired: harness pid 59854
+exit=0
+fm_session_lock_owned_by_self: OWNED
+state/.lock = 59854   (expected Pi pid 59854)
+=== npm launcher codex, replacement child | codex child pid 60310 | command/exec exit 0
+--- process ancestry as seen by the shell check (innermost first)
+60323 60311 bash bash /tmp/fm-native-demo.0n6e6z/probe.sh
+60311 60310 /opt/homebrew/li <npm vendor codex> app-server --stdio
+60310 59854 node node /opt/homebrew/bin/codex app-server --stdio
+59854 59844 /tmp/fm-native-d /tmp/fm-native-demo.0n6e6z/pi /tmp/fm-native-demo.0n6e6z/demo.mjs
+--- fm-lock.sh (acquire)
+lock acquired: harness pid 59854
+exit=0
+fm_session_lock_owned_by_self: OWNED
+state/.lock = 59854   (expected Pi pid 59854)
+
+(Foreign-session exclusion is shown separately in manual-foreign-session-exclusion-transcript.txt.)

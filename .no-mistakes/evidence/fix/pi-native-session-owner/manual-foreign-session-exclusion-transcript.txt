@@ -1,0 +1,29 @@
+This Pi-named session pid 66269
+A second live pi-named session pid 66272 holds state/.lock. Shell checks inside this session's native Codex child must NOT own it and must not take it over.
+=== ChatGPT.app codex under a foreign live Pi lock | codex child pid 66273 | command/exec exit 0
+--- process ancestry as seen by the shell check (innermost first)
+66284 66273 bash bash /tmp/fm-native-demo.En4r86/probe.sh
+66273 66269 /Applications/Ch /Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --stdio
+66269 66259 /tmp/fm-native-d /tmp/fm-native-demo.En4r86/pi /tmp/fm-native-demo.En4r86/demo.mjs
+--- state/.lock before = 66272
+fm_session_lock_owned_by_self: NOT OWNED
+--- fm-lock.sh status
+lock: held by live harness pid 66272
+--- fm-lock.sh (acquire)
+error: another live firstmate session holds the lock (pid 66272); operate read-only until resolved
+exit=1
+--- state/.lock after = 66272
+=== npm launcher codex under a foreign live Pi lock | codex child pid 66422 | command/exec exit 0
+--- process ancestry as seen by the shell check (innermost first)
+66435 66423 bash bash /tmp/fm-native-demo.En4r86/probe.sh
+66423 66422 /opt/homebrew/li /opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex app-server --stdio
+66422 66269 node node /opt/homebrew/bin/codex app-server --stdio
+66269 66259 /tmp/fm-native-d /tmp/fm-native-demo.En4r86/pi /tmp/fm-native-demo.En4r86/demo.mjs
+--- state/.lock before = 66272
+fm_session_lock_owned_by_self: NOT OWNED
+--- fm-lock.sh status
+lock: held by live harness pid 66272
+--- fm-lock.sh (acquire)
+error: another live firstmate session holds the lock (pid 66272); operate read-only until resolved
+exit=1
+--- state/.lock after = 66272

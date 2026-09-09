@@ -1,0 +1,5 @@
+ok - Pi watcher arm distinguishes all session lock ownership states
+ok - Pi close handler verifies session-lock ownership before successor launch
+ok - Pi hung successor falls back to one typed actionable wake
+ok - Pi session transitions auto-arm through a generation owner across /new /resume /fork/reload, stale callbacks, and quit
+ok - Pi session replacement auto-arms and carries its in-flight actionable close

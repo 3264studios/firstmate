@@ -1,0 +1,6 @@
+ok - branch owns accepted wakes with a stable prefix and deterministic verdict-driven delivery
+ok - a captain outcome reaches main's model as one typed, sequence-keyed processing request while routine notes stay plain
+ok - branch activates on a cold start once the lock is acquired, never before
+ok - queued wakes and mirrors stop mutating branch state after lock ownership is lost
+ok - a Pi session whose lock is held by a sibling or an enclosing live process accepts nothing and mutates no branch state
+ok - a session replaced mid-delivery cancels cleanly and the stored outcome still arrives exactly once

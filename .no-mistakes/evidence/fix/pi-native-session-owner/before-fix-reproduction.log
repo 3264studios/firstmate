@@ -1,0 +1,7 @@
+# base commit 9ba29db bin/fm-session-lock-lib.sh + new tests/fm-session-lock-ancestry.test.sh
+# test_pi_native_real_processes (real processes, direct + npm launcher shapes):
+not ok - real Pi/native tree: lock acquired: harness pid 38169
+exit=1
+# test_pi_native_owner (portable ps table):
+not ok - native: owner 700, expected 800
+exit=1

@@ -1,0 +1,29 @@
+Native Codex guard: Pi 0.85.1, pi-codex-native 0.2.1, Codex {"/Applications/ChatGPT.app/Contents/Resources/codex":"codex-cli 0.153.4","/opt/homebrew/bin/codex":"codex-cli 0.151.0"}
+{
+  "result": "PASS",
+  "piVersion": "0.85.1",
+  "adapterVersion": "0.2.1",
+  "codexVersions": {
+    "/Applications/ChatGPT.app/Contents/Resources/codex": "codex-cli 0.153.4",
+    "/opt/homebrew/bin/codex": "codex-cli 0.151.0"
+  },
+  "checks": [
+    "actual Pi runtime and native package",
+    "full startup through real Codex command/exec and shell ownership",
+    "native child replacement preserves Pi owner",
+    "installed npm Codex launcher resolves to the same Pi owner",
+    "native Ultra preserved across operational turns and restart",
+    "installed native adapter emits observable output progress",
+    "actual FirstMate primary extensions",
+    "startup operational message forwarded",
+    "MCP watcher control",
+    "idle watcher notification opens native turn",
+    "durable completion visible/read/ack once",
+    "duplicate acknowledgement refused",
+    "restart does not reprocess acknowledged outcome"
+  ],
+  "limits": [
+    "model turns and watcher-close process use deterministic peers; no live model or backend tested"
+  ]
+}
+exit=0
