@@ -491,6 +491,7 @@ const child = spawn(process.env.FM_TEST_VENDOR_CODEX, process.argv.slice(2), { s
 child.on("exit", (code, signal) => process.exit(signal ? 1 : code));
 JS
   chmod +x "$dir/lib/node_modules/@openai/codex/bin/codex.js"
+  printf '{"type":"module"}\n' > "$dir/lib/node_modules/@openai/codex/package.json"
   ln -s ../lib/node_modules/@openai/codex/bin/codex.js "$dir/bin/codex"
   cat > "$dir/pi-session" <<'SH'
 #!/usr/bin/env bash
