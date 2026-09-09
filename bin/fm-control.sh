@@ -42,6 +42,11 @@
 #              already recorded for it.
 #              A prefixed raw-command basename cannot reconstruct its launch
 #              command, so relaunch requires an explicit --harness for it.
+#              A recorded start_dir must still satisfy bin/fm-spawn.sh --help's
+#              start-directory contract (supported harness/backend/kind, an
+#              accessible directory inside the worktree) before the old agent
+#              is stopped, so a launch that owner must refuse never costs the
+#              running agent.
 #              --note is required for a ship or scout, whose replacement
 #              inherits the local copy but none of the conversation; a
 #              secondmate reconciles its own home's records at startup, so its
