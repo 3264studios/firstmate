@@ -572,10 +572,10 @@ export default function (pi: ExtensionAPI) {
   // dispatch order, one at a time (the branch runs drain -> handle -> ack
   // serially by design).
   let branchChain: Promise<void> = Promise.resolve();
-  // Serializes DELIVERY work. The store scripts and the ownership walk are
-  // awaited rather than synchronous now (lib/fm-async-exec.ts), which means a
-  // second outcome, a turn boundary, or main's acknowledgement can reach this
-  // extension while an earlier one is still between two of its own steps.
+  // Serializes DELIVERY work. The store scripts are awaited rather than
+  // synchronous now (lib/fm-async-exec.ts), which means a second outcome, a
+  // turn boundary, or main's acknowledgement can reach this extension while an
+  // earlier one is still between two of its own steps.
   // Every such unit runs to completion here before the next one starts, so
   // the guarantees the single thread used to provide for free - one delivery
   // at a time, the durable append before anything visible, the read cursor

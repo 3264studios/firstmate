@@ -204,7 +204,8 @@ fm_harness_ancestry_pids() {
 # that need that ancestry identity. This is not necessarily the pid written to
 # the session lock: fm_session_lock_anchor_pid owns that choice and uses a
 # trusted Claude session's model-loop pid instead. Every non-Claude harness
-# reports a single pid, so this remains its innermost match unchanged.
+# reports a single pid - its innermost match, or the Pi engine the native bridge
+# above resolves to - so this is that pid unchanged.
 fm_harness_ancestry_pid() {
   local pids
   pids=$(fm_harness_ancestry_pids) || return 1
