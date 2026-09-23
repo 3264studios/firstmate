@@ -148,8 +148,6 @@ jq_state() { jq "$@" "$STATE"; }
 save() { local tmp="$STATE.tmp.$$"; cat > "$tmp" && mv "$tmp" "$STATE"; }
 
 cmd=${1:-}; sub=${2:-}
-# FM_FAKE_HERDR_DROP_EMPTIED=1: closing a workspace's last tab removes the
-# workspace, as real Herdr does.
 # FM_FAKE_HERDR_LIST_BARRIER=<n>: each workspace list snapshots the state, then
 # waits until <n> lists have snapshotted, so concurrent callers all observe the
 # same pre-mutation state regardless of scheduling.
@@ -212,30 +210,17 @@ case "$cmd $sub" in
     ;;
   "pane close")
     pane=${3:-}
-    jq_state --arg p "$pane" --argjson drop "${FM_FAKE_HERDR_DROP_EMPTIED:-0}" '([.tabs[]|select(.pane_id == $p and $drop == 1)|.workspace_id]) as $emptied
-      | .tabs |= [.[]|select(.pane_id != $p)]
-      | .tabs as $left
-      | .workspaces |= [.[]|select(.workspace_id as $w | ($emptied | index($w)) == null or any($left[]; .workspace_id == $w))]' | save
+    jq_state --arg p "$pane" '.tabs |= [.[]|select(.pane_id != $p)]' | save
     ;;
   "tab close")
     tab=${3:-}
-    jq_state --arg t "$tab" --argjson drop "${FM_FAKE_HERDR_DROP_EMPTIED:-0}" '([.tabs[]|select(.tab_id == $t and $drop == 1)|.workspace_id]) as $emptied
-      | .tabs |= [.[]|select(.tab_id != $t)]
-      | .tabs as $left
-      | .workspaces |= [.[]|select(.workspace_id as $w | ($emptied | index($w)) == null or any($left[]; .workspace_id == $w))]' | save
+    jq_state --arg t "$tab" '.tabs |= [.[]|select(.tab_id != $t)]' | save
     ;;
   "pane get")
     pane=${3:-}
     jq_state -c --arg p "$pane" '[.tabs[]|select(.pane_id == $p)] as $m
       | if ($m | length) == 1 then {result:{pane:{pane_id:$p, tab_id:$m[0].tab_id, workspace_id:$m[0].workspace_id}}}
         else {error:{code:"pane_not_found"}} end'
-    ;;
-  "pane process-info")
-    pane=${4:-}
-    if [ -n "${FM_FAKE_HERDR_SHELL_PID:-}" ]; then
-      jq -cn --arg p "$pane" --argjson pid "$FM_FAKE_HERDR_SHELL_PID" \
-        '{result:{type:"pane_process_info",process_info:{pane_id:$p,shell_pid:$pid,foreground_processes:[{pid:$pid,name:"zsh",argv:["zsh"]}]}}}'
-    fi
     ;;
   "agent get")
     pane=${3:-}
@@ -1098,24 +1083,20 @@ test_worker_fallback_ignores_a_users_workers_workspace() {
   pass "Herdr worker placement and discovery ignore a user's own 'workers' workspaces"
 }
 
-# Worker-container fixture over the stateful fake: a focused captain workspace,
-# a real idle process standing in for every seeded pane's lone shell, and the
-# named session's socket for the presentation lock path.
+# Worker-container fixture over the stateful fake: a focused captain workspace
+# and the named session's socket for the presentation lock path.
 worker_container_fixture() {  # <dir>
   local dir=$1
   mkdir -p "$dir/home"; : > "$dir/log"; : > "$dir/fmtest.sock"
   make_herdr_statefake "$dir" > "$dir/fakebin.path"
   printf '%s\n' '{"next":1,"workspaces":[{"workspace_id":"c1","label":"captain","focused":true,"active_tab_id":"c1:t1"}],"tabs":[{"tab_id":"c1:t1","label":"1","workspace_id":"c1","pane_id":"c1:p1","focused":true}],"agent_status":{}}' > "$dir/state.json"
-  sleep 300 &
-  printf '%s\n' "$!" > "$dir/shell.pid"
 }
 
 worker_container_run() {  # <dir> <bash-snippet> [extra env assignments...]
   local dir=$1 snippet=$2
   shift 2
   env PATH="$(cat "$dir/fakebin.path"):$PATH" FM_HOME="$dir/home" FM_HERDR_LOG="$dir/log" \
-    FM_FAKE_HERDR_STATE="$dir/state.json" FM_FAKE_HERDR_SOCKET="$dir/fmtest.sock" \
-    FM_FAKE_HERDR_SHELL_PID="$(cat "$dir/shell.pid")" FM_FAKE_HERDR_DROP_EMPTIED=1 FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 "$@" \
+    FM_FAKE_HERDR_STATE="$dir/state.json" FM_FAKE_HERDR_SOCKET="$dir/fmtest.sock" "$@" \
     bash -c ". \"\$0/bin/backends/herdr.sh\"; $snippet" "$ROOT"
 }
 
@@ -1127,10 +1108,10 @@ WORKER_LAUNCH_SNIPPET='raw=$(fm_backend_herdr_container_ensure /tmp worker-home 
   printf "%s" "$container"'
 
 # Two degraded launches in one home that both find no worker container each
-# create one; the listing's first wins, the other creator closes only its own
-# still-seeded workspace, and both workers land in the one survivor.
-test_concurrent_worker_fallbacks_share_one_container() {
-  local dir label pid_a pid_b status count out
+# create one. Both workers launch and stay discoverable, and a later spawn in
+# that home passes its preflight and lands in the lowest-id container.
+test_concurrent_worker_fallbacks_all_launch_and_stay_discoverable() {
+  local dir label pid_a pid_b count out lowest
   dir="$TMP_ROOT/worker-fallback-race"
   worker_container_fixture "$dir"
   label=$(worker_label_for "$dir/home")
@@ -1140,20 +1121,35 @@ test_concurrent_worker_fallbacks_share_one_container() {
     > "$dir/b.out" 2> "$dir/b.err" & pid_b=$!
   wait "$pid_a" || fail "first concurrent worker fallback failed: $(cat "$dir/a.err")"
   wait "$pid_b" || fail "second concurrent worker fallback failed: $(cat "$dir/b.err")"
-  kill "$(cat "$dir/shell.pid")" 2>/dev/null || true
   count=$(jq --arg l "$label" '[.workspaces[] | select(.label == $l)] | length' "$dir/state.json")
-  [ "$count" = 1 ] || fail "concurrent worker fallbacks left $count containers labeled '$label'"
-  [ "$(cat "$dir/a.out")" = "$(cat "$dir/b.out")" ] \
-    || fail "concurrent worker fallbacks used different containers: $(cat "$dir/a.out") vs $(cat "$dir/b.out")"
-  out=$(jq -r --arg l "$label" '(.workspaces[] | select(.label == $l) | .workspace_id) as $w
-    | [.tabs[] | select(.workspace_id == $w) | .label] | sort | join(",")' "$dir/state.json")
-  [ "$out" = "fm-race-a,fm-race-b" ] || fail "concurrent worker fallbacks did not both land in the survivor: $out"
+  [ "$count" = 2 ] || fail "the race fixture did not produce the duplicate worker containers it exercises: $count"
+  out=$(worker_container_run "$dir" 'fm_backend_herdr_list_live fmtest' | cut -f2 | sort | paste -sd, -)
+  [ "$out" = "fm-race-a,fm-race-b" ] || fail "discovery skipped a worker in a duplicate container: $out"
+  out=$(worker_container_run "$dir" "fm_backend_herdr_worker_container_preflight fmtest fm-race-c && $WORKER_LAUNCH_SNIPPET" \
+    TASK=fm-race-c 2>&1) || fail "a spawn during the duplicate-container window was refused: $out"
+  lowest=$(jq -r --arg l "$label" '[.workspaces[] | select(.label == $l) | .workspace_id]
+    | sort_by(.[1:] | tonumber) | .[0]' "$dir/state.json")
+  [ "$out" = "fmtest:$lowest" ] || fail "a spawn among duplicate containers did not pick the lowest id $lowest: $out"
+  out=$(worker_container_run "$dir" 'fm_backend_herdr_list_live fmtest' | cut -f2 | sort | paste -sd, -)
+  [ "$out" = "fm-race-a,fm-race-b,fm-race-c" ] || fail "discovery missed a worker after the duplicate window: $out"
   [ "$(jq -r '.workspaces[] | select(.focused == true) | .workspace_id' "$dir/state.json")" = c1 ] \
-    || fail "converging concurrent worker containers moved the captain's focus"
-  out=$(worker_container_run "$dir" 'fm_backend_herdr_worker_container_preflight fmtest fm-task' 2>&1)
-  status=$?
-  expect_code 0 "$status" "preflight refused placement after concurrent worker fallbacks: $out"
-  pass "concurrent Herdr worker fallbacks in one home converge on one container holding both workers"
+    || fail "concurrent worker fallbacks moved the captain's focus"
+  pass "concurrent Herdr worker fallbacks all launch, stay discoverable, and never block later spawns"
+}
+
+# Placement among duplicate worker containers follows the lowest workspace id,
+# not Herdr's list order.
+test_worker_container_select_uses_the_lowest_id() {
+  local dir log resp fb out home label
+  dir="$TMP_ROOT/worker-select-lowest"; mkdir -p "$dir/responses" "$dir/home"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  home="$dir/home"; label=$(worker_label_for "$home")
+  workspace_list_json w10 "$label" w1 firstmate w9 "$label" w3 workers > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /tmp worker-home' "$ROOT")
+  [ "$out" = w9 ] || fail "worker placement did not pick the lowest-id duplicate container: $out"
+  assert_not_contains "$(cat "$log")" $'\x1fworkspace\x1fcreate' "worker placement created a container beside existing ones"
+  pass "Herdr worker placement picks the lowest-id container among exact duplicates"
 }
 
 # A home's first fallback while another spawn holds the session presentation
@@ -1177,47 +1173,11 @@ test_worker_fallback_succeeds_while_the_presentation_lock_is_held() {
   out=$(worker_container_run "$dir" "$WORKER_LAUNCH_SNIPPET" TASK=fm-contended 2>&1)
   status=$?
   : > "$dir/release"; wait "$holder" || true
-  kill "$(cat "$dir/shell.pid")" 2>/dev/null || true
   expect_code 0 "$status" "a first worker fallback under a held presentation lock must still launch: $out"
   out=$(jq -r --arg l "$label" '(.workspaces[] | select(.label == $l) | .workspace_id) as $w
     | [.tabs[] | select(.workspace_id == $w) | .label] | join(",")' "$dir/state.json")
   [ "$out" = fm-contended ] || fail "contended first fallback did not place its worker in '$label': $out"
   pass "a home's first Herdr worker fallback succeeds while the presentation lock is held"
-}
-
-# A losing creator never closes a workspace it cannot prove is still its own
-# untouched seeded container; both stay and placement refuses.
-test_worker_container_converge_keeps_unprovable_duplicates() {
-  local dir label mode create out status before
-  for mode in extra-tab agent foreign-seed; do
-    dir="$TMP_ROOT/worker-converge-$mode"
-    worker_container_fixture "$dir"
-    label=$(worker_label_for "$dir/home")
-    jq --arg l "$label" '.workspaces += [{workspace_id:"w1",label:$l},{workspace_id:"w2",label:$l}]
-      | .tabs += [{tab_id:"w1:t1",label:"fm-a",workspace_id:"w1",pane_id:"w1:p1"},
-                  {tab_id:"w2:t2",label:"1",workspace_id:"w2",pane_id:"w2:p2"}]' \
-      "$dir/state.json" > "$dir/state.tmp" && mv "$dir/state.tmp" "$dir/state.json"
-    create='{"result":{"workspace":{"workspace_id":"w2"},"tab":{"tab_id":"w2:t2"},"root_pane":{"pane_id":"w2:p2"}}}'
-    case "$mode" in
-      extra-tab)
-        jq '.tabs += [{tab_id:"w2:t3",label:"fm-other",workspace_id:"w2",pane_id:"w2:p3"}]' \
-          "$dir/state.json" > "$dir/state.tmp" && mv "$dir/state.tmp" "$dir/state.json" ;;
-      agent) fake_herdr_set_agent_status "$dir/state.json" w2:p2 idle ;;
-      foreign-seed) create='{"result":{"workspace":{"workspace_id":"w2"},"tab":{"tab_id":"w2:t9"},"root_pane":{"pane_id":"w2:p9"}}}' ;;
-    esac
-    before=$(jq -c '.workspaces, .tabs' "$dir/state.json")
-    : > "$dir/log"
-    # shellcheck disable=SC2016  # expanded by the converging shell
-    out=$(worker_container_run "$dir" 'fm_backend_herdr_worker_container_converge fmtest "$LABEL" "$CREATE"' \
-      LABEL="$label" CREATE="$create" 2>&1)
-    status=$?
-    kill "$(cat "$dir/shell.pid")" 2>/dev/null || true
-    expect_code 1 "$status" "$mode: an unprovable losing container must not be converged: $out"
-    assert_contains "$out" "could not be reduced to one" "$mode: unprovable duplicate refusal did not explain itself"
-    [ "$(jq -c '.workspaces, .tabs' "$dir/state.json")" = "$before" ] || fail "$mode: an unprovable duplicate was mutated"
-    assert_not_contains "$(cat "$dir/log")" $'\x1fpane\x1fclose' "$mode: an unprovable duplicate was closed"
-  done
-  pass "Herdr worker-container convergence leaves occupied, agent-bearing, or unowned duplicates untouched"
 }
 
 test_worker_container_preflight_refuses_legacy_and_fallback_duplicates() {
@@ -5632,9 +5592,9 @@ test_worker_fallback_uses_a_separate_container
 test_worker_container_preflight_refuses_legacy_and_fallback_duplicates
 test_worker_workspace_label_is_role_neutral
 test_worker_fallback_ignores_a_users_workers_workspace
-test_concurrent_worker_fallbacks_share_one_container
+test_concurrent_worker_fallbacks_all_launch_and_stay_discoverable
 test_worker_fallback_succeeds_while_the_presentation_lock_is_held
-test_worker_container_converge_keeps_unprovable_duplicates
+test_worker_container_select_uses_the_lowest_id
 test_worker_husk_in_legacy_supervisor_workspace_is_closed_after_replacement
 test_workspace_ensure_prefers_the_launcher_over_the_first_label_match
 test_workspace_ensure_refuses_an_ambiguous_label_with_no_launcher

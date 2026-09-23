@@ -68,20 +68,18 @@ That covers a missing or unusable socket identity, a closed or unreadable launch
 A `--secondmate` launch deliberately stands up that secondmate home's own workspace instead of inheriting the launcher's.
 
 Firstmate running outside Herdr has no launcher workspace, so parent discovery requires a unique home-label match.
-The separate flat worker container also requires a unique label match, regardless of the launcher's identity.
-An ambiguous label lookup refuses placement rather than adopting one of the candidates.
+An ambiguous supervisor label lookup refuses placement rather than adopting one of the candidates.
 Avoid giving personal workspaces the reserved supervisor or worker-container labels.
 An older secondmate workspace using `firstmate-<id>` is not migrated automatically; rename it manually before expecting new tasks or recovery to use it.
 Before creating a worker, spawn checks both the legacy parent container and the separate worker container for a same-label task tab and refuses live or unreadable candidates without adopting or closing them.
-Recovery and list-live discovery scan both containers for this home, preserving discovery of already-running workers in the legacy layout.
+Recovery and list-live discovery scan the legacy container and every worker container for this home, preserving discovery of already-running workers in the legacy layout.
 
 Existing task operations use recorded endpoint ids and do not move a live task when labels change.
 The per-home worker container is reused while it has task tabs.
 Closing its last tab can remove the workspace, and the next spawn recreates it.
 Creating the worker container takes no lock, so a spawn that fell back because the presentation lock was contended still gets a worker.
-After creating it, the spawn re-lists the exact label, and when concurrent degraded launches each created one, the first in Herdr's listing wins.
-Each other creator closes only its own new workspace, by the exact seeded pane its create returned and only while that pane is still its lone no-agent shell, and then uses the winner.
-If that cannot be proven, both remain and placement refuses as for any duplicate label.
+Concurrent degraded launches in one home can therefore each create a container with the same exact worker label.
+Those duplicates are tolerated: new placement uses the one with the lowest workspace id, and the duplicate check and discovery scan every exact match.
 The control plane's reclaim of a destroyed endpoint uses the same placement path while pinning the Herdr session and worktree recorded by the task ([`agent-control.md`](agent-control.md) "Reclaiming a task whose endpoint is gone").
 
 ## Presentation spaces

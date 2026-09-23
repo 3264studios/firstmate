@@ -411,13 +411,13 @@ fm_backend_herdr_worker_container_preflight() { # <session> <task-label>
     | . as $all
     | (if $parent != "" then map(select(.workspace_id == $parent)) else map(select(.label == $home)) end) as $parents
     | ($all | map(select(.label == $workers))) as $fallback
-    | if ($parents | length) > 1 or ($fallback | length) > 1 then error("ambiguous worker placement")
+    | if ($parents | length) > 1 then error("ambiguous worker placement")
       else [$parents[], $fallback[]]
         | if all(.[]; (.workspace_id | type) == "string" and (.workspace_id | length) > 0)
           then unique_by(.workspace_id) | map(.workspace_id) | join("\n")
           else error("missing workspace identity") end end
   ' 2>/dev/null) || {
-    echo "error: ambiguous herdr parent labeled '$parent_label' or worker containers labeled '$worker_label' in session '$session'; refusing worker placement" >&2
+    echo "error: ambiguous herdr parent labeled '$parent_label' or unreadable worker containers labeled '$worker_label' in session '$session'; refusing worker placement" >&2
     return 1
   }
   while IFS= read -r workspace; do
@@ -2043,46 +2043,17 @@ fm_backend_herdr_workspace_unique() {  # <session> <label>
   printf '%s' "${matches%%$'\n'*}"
 }
 
-# fm_backend_herdr_worker_container_converge: after this invocation created a
-# worker container from <create-response>, settle concurrent same-label creates
-# without a lock. The first exact-label match in Herdr's listing wins. A loser
-# closes only its own just-created workspace, by the exact seeded pane id its
-# create response returned, and only while that workspace still holds exactly
-# that seeded tab and pane and the pane is a lone no-agent shell; it then adopts
-# the winner. Anything unproven keeps both and reports the ambiguity (return 1).
-# Sets FM_BACKEND_HERDR_WS_ID to the workspace the caller must use.
-fm_backend_herdr_worker_container_converge() {  # <session> <label> <create-response>
-  local session=$1 label=$2 out=$3 wsid tab pane matches winner tabs panes
-  FM_BACKEND_HERDR_WS_ID=""
-  wsid=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
-  tab=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
-  pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
-  matches=$(fm_backend_herdr_workspace_find_all "$session" "$label")
-  winner=${matches%%$'\n'*}
-  if [ "$winner" = "$wsid" ]; then
-    FM_BACKEND_HERDR_WS_ID=$wsid
-    return 0
-  fi
-  if [ -n "$winner" ] && [ -n "$tab" ] && [ -n "$pane" ] &&
-    printf '%s\n' "$matches" | grep -Fqx -- "$wsid" &&
-    tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) &&
-    panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$wsid" 2>/dev/null) &&
-    printf '%s' "$tabs" | jq -e --arg tab "$tab" \
-      '(.result.tabs | type) == "array" and (.result.tabs | length) == 1 and .result.tabs[0].tab_id == $tab' >/dev/null 2>&1 &&
-    printf '%s' "$panes" | jq -e --arg tab "$tab" --arg pane "$pane" \
-      '(.result.panes | type) == "array" and (.result.panes | length) == 1
-       and .result.panes[0].pane_id == $pane and .result.panes[0].tab_id == $tab' >/dev/null 2>&1 &&
-    [ "$(fm_backend_herdr_pane_process_state "$session" "$pane")" = shell ] &&
-    fm_backend_herdr_projection_close_pane_focus_preserving "$session" "$pane" no-agent &&
-    [ "$(fm_backend_herdr_workspace_presence_state "$session" "$wsid")" = dead ]; then
-    matches=$(fm_backend_herdr_workspace_find_all "$session" "$label")
-    if [ "${matches%%$'\n'*}" = "$winner" ]; then
-      FM_BACKEND_HERDR_WS_ID=$winner
-      return 0
-    fi
-  fi
-  echo "error: concurrent herdr worker containers labeled '$label' in session '$session' (${matches//$'\n'/ }) could not be reduced to one; rename or close the extras" >&2
-  return 1
+# fm_backend_herdr_worker_container_select: this home's worker container with
+# the lowest workspace id among every exact match of <label>, or empty when
+# there is none. Concurrent lock-free creates can leave more than one such
+# container; each is harmless, discovery scans them all, and new placement
+# always picks the same one regardless of Herdr's list order.
+fm_backend_herdr_worker_container_select() {  # <session> <label>
+  fm_backend_herdr_workspace_find_all "$1" "$2" | jq -Rrs '
+    split("\n") | map(select(length > 0))
+    | sort_by(if test("^w[0-9]+$") then [0, (.[1:] | tonumber), .] else [1, 0, .] end)
+    | .[0] // empty
+  ' 2>/dev/null
 }
 
 # fm_backend_herdr_workspace_ensure: the workspace this spawn's task tab
@@ -2132,11 +2103,12 @@ fm_backend_herdr_worker_container_converge() {  # <session> <label> <create-resp
 #   launcher-home - supervisor/legacy callers inherit their exact launcher
 #                   workspace, or use the unique home label without ancestry.
 #   worker-home   - validates the same launcher identity but selects a separate
-#                   role-neutral worker container, never the parent's workspace.
+#                   role-neutral worker container, never the parent's workspace;
+#                   among several exact matches it takes the lowest id.
 #   other-home    - a --secondmate launch stands up that different home's own
 #                   supervisor workspace and deliberately ignores the launcher.
-# A label lookup must resolve exactly one workspace or create a fresh one;
-# labels never disambiguate between multiple candidates or authorize cleanup.
+# A supervisor label lookup must resolve exactly one workspace or create a
+# fresh one; labels never disambiguate supervisors or authorize cleanup.
 #
 # Returns 0 on success, 3 for a refusal whose exact reason is already on
 # stderr, and 1 for a failed or unparseable herdr call.
@@ -2158,9 +2130,13 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship
       *) return 3 ;;
     esac
   fi
-  label=$(fm_backend_herdr_workspace_label)
-  [ "$relationship" != worker-home ] || label=$(fm_backend_herdr_worker_workspace_label)
-  wsid=$(fm_backend_herdr_workspace_unique "$session" "$label") || return 3
+  if [ "$relationship" = worker-home ]; then
+    label=$(fm_backend_herdr_worker_workspace_label)
+    wsid=$(fm_backend_herdr_worker_container_select "$session" "$label")
+  else
+    label=$(fm_backend_herdr_workspace_label)
+    wsid=$(fm_backend_herdr_workspace_unique "$session" "$label") || return 3
+  fi
   if [ -n "$wsid" ]; then
     FM_BACKEND_HERDR_WS_ID=$wsid
     printf '%s' "$wsid"
@@ -2169,13 +2145,6 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship
   out=$(fm_backend_herdr_cli "$session" workspace create --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
   wsid=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
   [ -n "$wsid" ] || return 1
-  if [ "$relationship" = worker-home ]; then
-    fm_backend_herdr_worker_container_converge "$session" "$label" "$out" || return 3
-    if [ "$FM_BACKEND_HERDR_WS_ID" != "$wsid" ]; then
-      printf '%s' "$FM_BACKEND_HERDR_WS_ID"
-      return 0
-    fi
-  fi
   FM_BACKEND_HERDR_WS_ID=$wsid
   # Herdr seeds a new workspace with one auto-created default tab firstmate
   # never uses. It is NOT pruned here: at this instant it is the workspace's
@@ -3789,8 +3758,8 @@ fm_backend_herdr_list_live() {  # <session>
   wsids=$(printf '%s' "$list" | jq -r --arg home "$(fm_backend_herdr_workspace_label)" \
     --arg workers "$(fm_backend_herdr_worker_workspace_label)" '
     [.result.workspaces[]?] as $all
-    | [$home, $workers][] as $name
-    | [$all[] | select(.label == $name)][0].workspace_id // empty
+    | ([$all[] | select(.label == $home)][0].workspace_id // empty),
+      ($all[] | select(.label == $workers) | .workspace_id // empty)
   ' 2>/dev/null)
   while IFS= read -r wsid; do
     [ -n "$wsid" ] || continue
