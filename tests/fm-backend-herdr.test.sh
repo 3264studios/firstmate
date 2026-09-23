@@ -148,6 +148,21 @@ jq_state() { jq "$@" "$STATE"; }
 save() { local tmp="$STATE.tmp.$$"; cat > "$tmp" && mv "$tmp" "$STATE"; }
 
 cmd=${1:-}; sub=${2:-}
+# FM_FAKE_HERDR_LIST_BARRIER=<n>: each workspace list snapshots the state, then
+# waits until <n> lists have snapshotted, so concurrent callers all observe the
+# same pre-mutation state regardless of scheduling.
+if [ "$cmd $sub" = "workspace list" ] && [ -n "${FM_FAKE_HERDR_LIST_BARRIER:-}" ]; then
+  snapshot=$(jq_state '{result:{workspaces:.workspaces}}')
+  mkdir -p "$STATE.lists"; : > "$STATE.lists/$$"
+  for _ in $(seq 1 300); do
+    [ "$(ls "$STATE.lists" | wc -l)" -lt "$FM_FAKE_HERDR_LIST_BARRIER" ] || break
+    sleep 0.01
+  done
+  printf '%s\n' "$snapshot"
+  exit 0
+fi
+while ! mkdir "$STATE.mutex" 2>/dev/null; do sleep 0.01; done
+trap 'rmdir "$STATE.mutex"' EXIT
 ws=""; label=""
 args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
@@ -163,6 +178,9 @@ case "$cmd $sub" in
     ;;
   "terminal title")
     printf '{"result":{"reason":"no_foreground_client"}}\n'
+    ;;
+  "session list")
+    jq -cn --arg sock "${FM_FAKE_HERDR_SOCKET:-}" '{sessions:[{name:"fmtest",running:true,socket_path:$sock}]}'
     ;;
   "workspace list")
     jq_state '{result:{workspaces:.workspaces}}'
@@ -1031,7 +1049,10 @@ test_worker_fallback_ignores_a_users_workers_workspace() {
   dir="$TMP_ROOT/worker-user-workspace"; mkdir -p "$dir/responses" "$dir/home"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   home="$dir/home"; label=$(worker_label_for "$home")
   workspace_list_json w1 firstmate w8 workers w9 workers > "$resp/1.out"
-  printf '{"result":{"workspace":{"workspace_id":"w5"},"tab":{"tab_id":"w5:t1"}}}\n' > "$resp/2.out"
+  : > "$dir/fmtest.sock"
+  jq -cn --arg sock "$dir/fmtest.sock" '{sessions:[{name:"fmtest",running:true,socket_path:$sock}]}' > "$resp/2.out"
+  cp "$resp/1.out" "$resp/3.out"
+  printf '{"result":{"workspace":{"workspace_id":"w5"},"tab":{"tab_id":"w5:t1"}}}\n' > "$resp/4.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /tmp worker-home' "$ROOT")
@@ -1056,6 +1077,56 @@ test_worker_fallback_ignores_a_users_workers_workspace() {
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_list_live fmtest' "$ROOT")
   assert_not_contains "$(cat "$log")" $'--workspace\x1fw8' "discovery scanned a user's workspace"
   pass "Herdr worker placement and discovery ignore a user's own 'workers' workspaces"
+}
+
+# Two degraded launches in one home that both find no worker container must
+# not each create one: the second rechecks under the session presentation lock
+# and adopts the first's, so the preflight keeps admitting spawns.
+test_concurrent_worker_fallbacks_share_one_container() {
+  local dir fb home label run pid_a pid_b status count out
+  dir="$TMP_ROOT/worker-fallback-race"; mkdir -p "$dir/home"; : > "$dir/log"
+  home="$dir/home"; label=$(worker_label_for "$home")
+  : > "$dir/fmtest.sock"
+  fb=$(make_herdr_statefake "$dir")
+  run() {
+    PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$dir/state.json" \
+      FM_FAKE_HERDR_SOCKET="$dir/fmtest.sock" FM_FAKE_HERDR_LIST_BARRIER=2 \
+      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /tmp worker-home' "$ROOT"
+  }
+  run > "$dir/a.out" 2> "$dir/a.err" & pid_a=$!
+  run > "$dir/b.out" 2> "$dir/b.err" & pid_b=$!
+  wait "$pid_a" || fail "first concurrent worker fallback failed: $(cat "$dir/a.err")"
+  wait "$pid_b" || fail "second concurrent worker fallback failed: $(cat "$dir/b.err")"
+  count=$(jq --arg l "$label" '[.workspaces[] | select(.label == $l)] | length' "$dir/state.json")
+  [ "$count" = 1 ] || fail "concurrent worker fallbacks created $count containers labeled '$label'"
+  [ "$(cat "$dir/a.out")" = "$(cat "$dir/b.out")" ] \
+    || fail "concurrent worker fallbacks used different containers: $(cat "$dir/a.out") vs $(cat "$dir/b.out")"
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$dir/state.json" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_worker_container_preflight fmtest fm-task' "$ROOT" 2>&1)
+  status=$?
+  expect_code 0 "$status" "preflight refused placement after concurrent worker fallbacks: $out"
+  pass "concurrent Herdr worker fallbacks in one home share one container"
+}
+
+test_worker_fallback_create_refuses_without_the_session_lock() {
+  local dir out status
+  dir="$TMP_ROOT/worker-fallback-lock-refusal"; mkdir -p "$dir"; : > "$dir/cli.log"
+  out=$(ROOT="$ROOT" CLI_LOG="$dir/cli.log" bash -c '
+    . "$ROOT/bin/backends/herdr.sh"
+    fm_backend_herdr_presentation_session_lock_path() { printf "/tmp/fm-herdr-contended-test-lock"; }
+    fm_lock_try_acquire() { return 1; }
+    sleep() { :; }
+    fm_backend_herdr_cli() {
+      printf "%s\n" "$*" >> "$CLI_LOG"
+      [ "$2 $3" != "workspace list" ] || printf "{\"result\":{\"workspaces\":[]}}\n"
+    }
+    fm_backend_herdr_workspace_ensure fmtest /tmp worker-home
+  ' 2>&1)
+  status=$?
+  expect_code 3 "$status" "worker container create without the session lock must refuse: $out"
+  assert_contains "$out" "refusing an unserialized create" "worker container lock refusal did not explain itself"
+  assert_not_contains "$(cat "$dir/cli.log")" "workspace create" "worker container was created without the session lock"
+  pass "Herdr worker container creation refuses when the session presentation lock is contended"
 }
 
 test_worker_container_preflight_refuses_legacy_and_fallback_duplicates() {
@@ -5470,6 +5541,8 @@ test_worker_fallback_uses_a_separate_container
 test_worker_container_preflight_refuses_legacy_and_fallback_duplicates
 test_worker_workspace_label_is_role_neutral
 test_worker_fallback_ignores_a_users_workers_workspace
+test_concurrent_worker_fallbacks_share_one_container
+test_worker_fallback_create_refuses_without_the_session_lock
 test_worker_husk_in_legacy_supervisor_workspace_is_closed_after_replacement
 test_workspace_ensure_prefers_the_launcher_over_the_first_label_match
 test_workspace_ensure_refuses_an_ambiguous_label_with_no_launcher

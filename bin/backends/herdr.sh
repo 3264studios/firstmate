@@ -986,6 +986,30 @@ fm_backend_herdr_presentation_session_lock_path() {  # <session>
   printf '%s/order-%s.lock' "$dir" "$key"
 }
 
+# fm_backend_herdr_presentation_session_lock_acquire: bounded (5s) acquisition
+# of <session>'s presentation lock for an adapter-owned critical section. Must
+# be called as a plain statement so this process owns the lock; on success the
+# held path is FM_BACKEND_HERDR_SESSION_LOCK, which the caller releases with
+# fm_lock_release. Never call it while this process already holds that lock.
+fm_backend_herdr_presentation_session_lock_acquire() {  # <session>
+  local lock_path attempt=0
+  FM_BACKEND_HERDR_SESSION_LOCK=
+  if ! declare -F fm_lock_try_acquire >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-wake-lib.sh
+    . "$FM_BACKEND_HERDR_ROOT/bin/fm-wake-lib.sh"
+  fi
+  lock_path=$(fm_backend_herdr_presentation_session_lock_path "$1") || return 1
+  while [ "$attempt" -lt 50 ]; do
+    if fm_lock_try_acquire "$lock_path"; then
+      FM_BACKEND_HERDR_SESSION_LOCK=$lock_path
+      return 0
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
 # fm_backend_herdr_projection_focus_snapshot: print the exact active
 # workspace and tab ids as one tab-separated record.
 # Presentation mutations use this read-only snapshot as their sole focus
@@ -2005,6 +2029,20 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
   fi
 }
 
+# fm_backend_herdr_workspace_unique: the single workspace id labeled exactly
+# <label> in <session>, or empty when none is. Returns 3 after reporting a
+# duplicate label, which no exact identity can disambiguate.
+fm_backend_herdr_workspace_unique() {  # <session> <label>
+  local session=$1 label=$2 matches count
+  matches=$(fm_backend_herdr_workspace_find_all "$session" "$label")
+  count=$(printf '%s' "$matches" | grep -c '[^[:space:]]' || true)
+  if [ "$count" -gt 1 ]; then
+    echo "error: ${count} herdr workspaces in session '$session' are labeled '$label' (${matches//$'\n'/ }) and no exact workspace identity selects one for this container; rename or close the extras" >&2
+    return 3
+  fi
+  printf '%s' "${matches%%$'\n'*}"
+}
+
 # fm_backend_herdr_workspace_ensure: the workspace this spawn's task tab
 # belongs in inside <session> - the launching agent's own exact workspace when
 # it has one, otherwise this HOME's persistent workspace, created in <cwd> if
@@ -2061,7 +2099,7 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
 # Returns 0 on success, 3 for a refusal whose exact reason is already on
 # stderr, and 1 for a failed or unparseable herdr call.
 fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship>]
-  local session=$1 cwd=$2 relationship=${3:-launcher-home} wsid out label matches count status
+  local session=$1 cwd=$2 relationship=${3:-launcher-home} wsid out label status lock=
   FM_BACKEND_HERDR_WS_ID=""
   FM_BACKEND_HERDR_WS_SEEDED_TAB_ID=""
   if [ "$relationship" = launcher-home ] || [ "$relationship" = worker-home ]; then
@@ -2080,19 +2118,29 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship
   fi
   label=$(fm_backend_herdr_workspace_label)
   [ "$relationship" != worker-home ] || label=$(fm_backend_herdr_worker_workspace_label)
-  matches=$(fm_backend_herdr_workspace_find_all "$session" "$label")
-  count=$(printf '%s' "$matches" | grep -c '[^[:space:]]' || true)
-  if [ "$count" -gt 1 ]; then
-    echo "error: ${count} herdr workspaces in session '$session' are labeled '$label' (${matches//$'\n'/ }) and no exact workspace identity selects one for this container; rename or close the extras" >&2
-    return 3
+  wsid=$(fm_backend_herdr_workspace_unique "$session" "$label") || return 3
+  if [ -z "$wsid" ] && [ "$relationship" = worker-home ]; then
+    # Concurrent degraded launches in one home would otherwise each create a
+    # same-labeled worker container, which the preflight then refuses forever.
+    if ! fm_backend_herdr_presentation_session_lock_acquire "$session"; then
+      echo "error: could not acquire the herdr session presentation lock to create worker container '$label' in session '$session'; refusing an unserialized create" >&2
+      return 3
+    fi
+    lock=$FM_BACKEND_HERDR_SESSION_LOCK
+    wsid=$(fm_backend_herdr_workspace_unique "$session" "$label") || {
+      fm_lock_release "$lock" || true
+      return 3
+    }
   fi
-  wsid=${matches%%$'\n'*}
   if [ -n "$wsid" ]; then
+    [ -z "$lock" ] || fm_lock_release "$lock" || true
     FM_BACKEND_HERDR_WS_ID=$wsid
     printf '%s' "$wsid"
     return 0
   fi
-  out=$(fm_backend_herdr_cli "$session" workspace create --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
+  out=$(fm_backend_herdr_cli "$session" workspace create --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) && status=0 || status=1
+  [ -z "$lock" ] || fm_lock_release "$lock" || true
+  [ "$status" -eq 0 ] || return 1
   wsid=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
   [ -n "$wsid" ] || return 1
   FM_BACKEND_HERDR_WS_ID=$wsid
@@ -3502,24 +3550,9 @@ fm_backend_herdr_kill_serialized() {  # <session> <pane>
 fm_backend_herdr_kill() {  # <target>
   fm_backend_herdr_target_ready "$1" || return 0
   local session=$FM_BACKEND_HERDR_SESSION pane=$FM_BACKEND_HERDR_PANE
-  local lock_path attempt=0 lock_held=0
-  if ! declare -F fm_lock_try_acquire >/dev/null 2>&1; then
-    # shellcheck source=bin/fm-wake-lib.sh
-    . "$FM_BACKEND_HERDR_ROOT/bin/fm-wake-lib.sh"
-  fi
-  if lock_path=$(fm_backend_herdr_presentation_session_lock_path "$session"); then
-    while [ "$attempt" -lt 50 ]; do
-      if fm_lock_try_acquire "$lock_path"; then
-        lock_held=1
-        break
-      fi
-      sleep 0.1
-      attempt=$((attempt + 1))
-    done
-  fi
-  if [ "$lock_held" = 1 ]; then
+  if fm_backend_herdr_presentation_session_lock_acquire "$session"; then
     fm_backend_herdr_kill_serialized "$session" "$pane"
-    fm_lock_release "$lock_path" || true
+    fm_lock_release "$FM_BACKEND_HERDR_SESSION_LOCK" || true
   else
     echo "warning: herdr task kill could not acquire its session presentation lock; refusing an unlocked pane close" >&2
   fi

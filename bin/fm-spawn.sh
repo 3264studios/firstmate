@@ -3328,6 +3328,9 @@ spawn_herdr_endpoint() { # <endpoint-cwd> [<recorded-session>]
     fi
   fi
   if [ "$HERDR_PROJECTED" -ne 1 ]; then
+    # The adapter takes the session lock itself if it must create the worker
+    # container, so this process must not still hold it.
+    spawn_herdr_presentation_order_lock_release
     HERDR_CONTAINER_RAW=$(FM_HOME="$HERDR_LABEL_HOME" fm_backend_herdr_container_ensure "$endpoint_cwd" "$HERDR_LAUNCHER_RELATIONSHIP" "$HERDR_SES") || {
       echo "error: could not ensure the herdr worker container in session '$HERDR_SES'; no endpoint was created" >&2
       exit 1

@@ -78,6 +78,7 @@ Recovery and list-live discovery scan both containers for this home, preserving 
 Existing task operations use recorded endpoint ids and do not move a live task when labels change.
 The per-home worker container is reused while it has task tabs.
 Closing its last tab can remove the workspace, and the next spawn recreates it.
+Creating the worker container takes the session presentation lock and rechecks the label inside it, so concurrent degraded launches in one home share one container; if the lock stays contended past its bounded wait, the spawn refuses rather than creating an unserialized duplicate.
 The control plane's reclaim of a destroyed endpoint uses the same placement path while pinning the Herdr session and worktree recorded by the task ([`agent-control.md`](agent-control.md) "Reclaiming a task whose endpoint is gone").
 
 ## Presentation spaces
