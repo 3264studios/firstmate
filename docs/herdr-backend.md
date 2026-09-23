@@ -49,7 +49,8 @@ The primary supervisor's home workspace label is `firstmate`.
 A secondmate supervisor's home workspace label is `2ndmate-<secondmate-id>`, derived from its validated `.fm-secondmate-home` marker.
 A secondmate launched by the primary receives a narrowly scoped home override during container creation.
 Workers use their own presentation spaces by default, as described below.
-When projection is disabled or cannot safely proceed, workers use a separate flat container labeled `workers` or `workers-<secondmate-id>`.
+When projection is disabled or cannot safely proceed, workers use a separate flat container labeled `workers · main · <hash>` for the primary home or `workers · <secondmate-id> · <hash>` for a secondmate home, where `<hash>` is the per-installation hash from `bin/fm-backend-hometag-lib.sh`.
+Discovery matches that full label exactly, so a user's own workspace named `workers` is never adopted or scanned.
 Each worker remains a task tab there; new workers never become tabs inside the supervisor's home workspace.
 A same-task husk left in the supervisor's workspace or the worker container by an earlier layout is closed only after its replacement exists, and only while it is still a dead or no-agent husk sharing its workspace with another tab.
 

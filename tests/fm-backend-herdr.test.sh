@@ -996,25 +996,78 @@ test_launcher_identity_refuses_a_workspace_missing_from_the_session() {
 
 # --- workspace_ensure placement ---------------------------------------------
 
+worker_label_for() {  # <home>
+  FM_HOME="$1" bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_worker_workspace_label' "$ROOT"
+}
+
+# Workspace-list fixture: <id> <label> pairs, labels passed through jq intact.
+workspace_list_json() {
+  local args=() i=0
+  while [ "$#" -ge 2 ]; do
+    args+=(--arg "i$i" "$1" --arg "l$i" "$2")
+    shift 2; i=$((i + 1))
+  done
+  jq -cn "${args[@]}" --argjson n "$i" \
+    '{result:{workspaces:[range(0; $n) as $k | {workspace_id: $ARGS.named["i\($k)"], label: $ARGS.named["l\($k)"]}]}}'
+}
+
 test_worker_fallback_uses_a_separate_container() {
-  local dir log resp fb out
-  dir="$TMP_ROOT/worker-fallback"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"},{"workspace_id":"w2","label":"workers"}]}}\n' > "$resp/1.out"
+  local dir log resp fb out home
+  dir="$TMP_ROOT/worker-fallback"; mkdir -p "$dir/responses" "$dir/home"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  home="$dir/home"
+  workspace_list_json w1 firstmate w3 workers w2 "$(worker_label_for "$home")" > "$resp/1.out"
   fb=$(make_herdr_fakebin "$dir")
-  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /tmp worker-home' "$ROOT")
   [ "$out" = w2 ] || fail "worker fallback must use the worker container, not the supervisor workspace: $out"
   assert_not_contains "$(cat "$log")" $'\x1fworkspace\x1fcreate' "worker fallback duplicated its existing container"
   pass "Herdr worker fallback remains separate from its supervisor's workspace"
 }
 
+# A user's own workspaces named plain "workers" are never adopted, scanned,
+# or treated as ambiguity; firstmate creates its exactly labeled container.
+test_worker_fallback_ignores_a_users_workers_workspace() {
+  local dir log resp fb out home label status
+  dir="$TMP_ROOT/worker-user-workspace"; mkdir -p "$dir/responses" "$dir/home"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  home="$dir/home"; label=$(worker_label_for "$home")
+  workspace_list_json w1 firstmate w8 workers w9 workers > "$resp/1.out"
+  printf '{"result":{"workspace":{"workspace_id":"w5"},"tab":{"tab_id":"w5:t1"}}}\n' > "$resp/2.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /tmp worker-home' "$ROOT")
+  [ "$out" = w5 ] || fail "worker fallback adopted a user's workspace instead of creating its own: $out"
+  assert_contains "$(cat "$log")" $'\x1fworkspace\x1fcreate\x1f--cwd\x1f/tmp\x1f--label\x1f'"$label" \
+    "worker fallback did not create its exactly labeled container"
+
+  : > "$log"; resp="$dir/responses-preflight"; mkdir -p "$resp"
+  workspace_list_json w1 firstmate w8 workers w9 workers > "$resp/1.out"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/2.out"
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_worker_container_preflight fmtest fm-task' "$ROOT" 2>&1)
+  status=$?
+  expect_code 0 "$status" "a user's duplicate 'workers' workspaces must not refuse worker placement: $out"
+  assert_not_contains "$(cat "$log")" $'--workspace\x1fw8' "preflight scanned a user's workspace"
+  assert_not_contains "$(cat "$log")" $'--workspace\x1fw9' "preflight scanned a user's workspace"
+
+  : > "$log"; resp="$dir/responses-list-live"; mkdir -p "$resp"
+  workspace_list_json w8 workers w1 firstmate > "$resp/1.out"
+  printf '{"result":{"tabs":[]}}\n' > "$resp/2.out"
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_list_live fmtest' "$ROOT")
+  assert_not_contains "$(cat "$log")" $'--workspace\x1fw8' "discovery scanned a user's workspace"
+  pass "Herdr worker placement and discovery ignore a user's own 'workers' workspaces"
+}
+
 test_worker_container_preflight_refuses_legacy_and_fallback_duplicates() {
-  local dir log resp fb out status container verdict
-  for container in firstmate workers; do
+  local dir log resp fb out status container verdict home kind
+  home="$TMP_ROOT/worker-preflight-home"; mkdir -p "$home"
+  for kind in legacy fallback; do
+    container=firstmate
+    [ "$kind" = legacy ] || container=$(worker_label_for "$home")
     for verdict in husk live unknown malformed split; do
-      dir="$TMP_ROOT/worker-preflight-$container-$verdict"
+      dir="$TMP_ROOT/worker-preflight-$kind-$verdict"
       mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
-      printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"%s"}]}}\n' "$container" > "$resp/1.out"
+      workspace_list_json w1 "$container" > "$resp/1.out"
       printf '{"result":{"tabs":[{"tab_id":"w1:t1","label":"fm-task"}]}}\n' > "$resp/2.out"
       printf '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"}]}}\n' > "$resp/3.out"
       printf '{"result":{"pane":{"pane_id":"w1:p1"}}}\n' > "$resp/4.out"
@@ -1026,7 +1079,7 @@ test_worker_container_preflight_refuses_legacy_and_fallback_duplicates() {
         split) printf '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"},{"pane_id":"w1:p2","tab_id":"w1:t1"}]}}\n' > "$resp/3.out" ;;
       esac
       fb=$(make_herdr_fakebin "$dir")
-      out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+      out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
         bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_worker_container_preflight fmtest fm-task' "$ROOT" 2>&1)
       status=$?
       if [ "$verdict" = husk ]; then
@@ -1042,17 +1095,25 @@ test_worker_container_preflight_refuses_legacy_and_fallback_duplicates() {
 }
 
 test_worker_workspace_label_is_role_neutral() {
-  local dir home primary secondmate
-  dir="$TMP_ROOT/worker-label"; home="$dir/sm-home"; mkdir -p "$home"
+  local dir home other primary secondmate other_label hash other_root
+  dir="$TMP_ROOT/worker-label"; home="$dir/sm-home"; other="$dir/sm-other"; mkdir -p "$home" "$other"
   printf 'bravo\n' > "$home/.fm-secondmate-home"
-  primary=$(FM_HOME="$dir" bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_worker_workspace_label' "$ROOT")
-  secondmate=$(FM_HOME="$home" bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_worker_workspace_label' "$ROOT")
-  [ "$primary" = workers ] || fail "primary worker container label should be 'workers', got '$primary'"
-  [ "$secondmate" = workers-bravo ] || fail "secondmate worker container label should be 'workers-bravo', got '$secondmate'"
-  case "$primary $secondmate" in
-    *firstmate*|*2ndmate*) fail "worker container labels name a supervisor role: $primary $secondmate" ;;
+  printf 'alpha\n' > "$other/.fm-secondmate-home"
+  primary=$(worker_label_for "$dir")
+  secondmate=$(worker_label_for "$home")
+  other_label=$(worker_label_for "$other")
+  hash=${primary##* · }
+  printf '%s' "$hash" | grep -Eqx '[0-9a-f]{8}' || fail "worker container label lacks an installation hash: '$primary'"
+  [ "$primary" = "workers · main · $hash" ] || fail "primary worker container label is wrong: '$primary'"
+  [ "$secondmate" = "workers · bravo · $hash" ] || fail "secondmate worker container label is wrong: '$secondmate'"
+  [ "$other_label" = "workers · alpha · $hash" ] || fail "second secondmate worker container label is wrong: '$other_label'"
+  case "$primary $secondmate $other_label" in
+    *firstmate*|*2ndmate*|*fm-*) fail "worker container labels name a supervisor role: $primary $secondmate $other_label" ;;
   esac
-  pass "Herdr worker container labels distinguish homes without naming a supervisor role"
+  other_root="$dir/other-install"; mkdir -p "$other_root"
+  [ "$(FM_HOME="$dir" FM_ROOT_OVERRIDE="$other_root" bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_worker_workspace_label' "$ROOT")" != "$primary" ] \
+    || fail "two installations share one worker container label"
+  pass "Herdr worker container labels distinguish homes and installations without naming a supervisor role"
 }
 
 # A pre-upgrade flat worker left an agent-free fm-<id> husk in its supervisor
@@ -3719,7 +3780,7 @@ test_list_live_includes_worker_and_legacy_containers() {
   local dir log resp fb out home
   dir="$TMP_ROOT/list-live-workers"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   home="$dir/home"; mkdir -p "$home"; printf 'bravo\n' > "$home/.fm-secondmate-home"
-  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"2ndmate-bravo"},{"workspace_id":"w2","label":"workers-bravo"},{"workspace_id":"w3","label":"workers"}]}}\n' > "$resp/1.out"
+  workspace_list_json w1 2ndmate-bravo w2 "$(worker_label_for "$home")" w3 "$(worker_label_for "$dir")" w4 workers > "$resp/1.out"
   printf '{"result":{"tabs":[{"tab_id":"w1:t1","label":"fm-legacy"}]}}\n' > "$resp/2.out"
   printf '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"}]}}\n' > "$resp/3.out"
   printf '{"result":{"tabs":[{"tab_id":"w2:t1","label":"fm-new"}]}}\n' > "$resp/4.out"
@@ -3729,6 +3790,7 @@ test_list_live_includes_worker_and_legacy_containers() {
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_list_live fmtest' "$ROOT")
   [ "$out" = $'fmtest:w1:p1\tfm-legacy\nfmtest:w2:p1\tfm-new' ] || fail "discovery stranded a legacy or new worker: $out"
   assert_not_contains "$(cat "$log")" $'--workspace\x1fw3' "discovery crossed into another home's workers"
+  assert_not_contains "$(cat "$log")" $'--workspace\x1fw4' "discovery scanned a user's workspace"
   pass "Herdr discovery includes both recorded legacy placement and the separate worker container within one home"
 }
 
@@ -5407,6 +5469,7 @@ test_launcher_identity_refuses_a_workspace_missing_from_the_session
 test_worker_fallback_uses_a_separate_container
 test_worker_container_preflight_refuses_legacy_and_fallback_duplicates
 test_worker_workspace_label_is_role_neutral
+test_worker_fallback_ignores_a_users_workers_workspace
 test_worker_husk_in_legacy_supervisor_workspace_is_closed_after_replacement
 test_workspace_ensure_prefers_the_launcher_over_the_first_label_match
 test_workspace_ensure_refuses_an_ambiguous_label_with_no_launcher

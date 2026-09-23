@@ -14,9 +14,9 @@
 # Container placement is owned by docs/herdr-backend.md "Presentation spaces".
 # A worker normally gets a disposable workspace containing its task pane;
 # disabled or degraded projection uses a separate role-neutral flat container
-# ("workers" or "workers-<secondmate-id>"). Supervisor home workspaces keep
-# their existing names; a proven agent-free worker husk left in one is closed
-# only after its replacement exists.
+# ("workers · main · <hash>" or "workers · <secondmate-id> · <hash>").
+# Supervisor home workspaces keep their existing names; a proven agent-free
+# worker husk left in one is closed only after its replacement exists.
 # A projection's random token and mutable label never authorize task ownership
 # or endpoint selection. A version 2 journal can participate in replacing only
 # its exact same-identity endpoint after metadata, home, session, workspace,
@@ -69,6 +69,9 @@
 FM_BACKEND_HERDR_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_HERDR_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+
+# shellcheck source=bin/fm-backend-hometag-lib.sh
+. "$FM_BACKEND_HERDR_ROOT/bin/fm-backend-hometag-lib.sh"
 
 # Shared composer-content classifier (empty|pending|unknown, and the fleet-wide
 # dead-shell-vs-agent-composer rule). Owned by bin/fm-composer-lib.sh, reused by
@@ -369,15 +372,18 @@ fm_backend_herdr_workspace_label() {
 
 # A degraded worker uses a separate per-home container. This is placement,
 # never endpoint authority; existing tasks keep their recorded pane IDs.
-# The label is role-neutral: "workers" for the primary home and
-# "workers-<secondmate-id>" for a secondmate home.
+# The label is role-neutral and installation-scoped: "workers · main · <hash>"
+# for the primary home and "workers · <secondmate-id> · <hash>" for a
+# secondmate home, where <hash> is fm_backend_hometag's per-installation hash.
 fm_backend_herdr_worker_workspace_label() {
-  local home
+  local home tag
   home=$(fm_backend_herdr_workspace_label)
   case "$home" in
-    2ndmate-*) printf 'workers-%s' "${home#2ndmate-}" ;;
-    *) printf 'workers' ;;
+    2ndmate-*) home=${home#2ndmate-} ;;
+    *) home=main ;;
   esac
+  tag=$(fm_backend_hometag)
+  printf 'workers · %s · %s' "$home" "${tag##*-}"
 }
 
 # Before creating a projected or fallback worker, refuse a surviving attempt

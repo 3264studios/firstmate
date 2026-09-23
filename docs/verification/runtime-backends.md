@@ -1205,7 +1205,7 @@ HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \
 ```
 
 Refreshed on 2026-09-22 against Herdr 0.8.2 protocol 20: the primary worker used `workers-firstmate`, the secondmate supervisor retained `2ndmate-e2esm1`, and its child used `workers-2ndmate-e2esm1`.
-Those fallback labels were later renamed to the role-neutral `workers` and `workers-<secondmate-id>`; the rename is covered by unit tests and awaits a live lab refresh.
+Those fallback labels were later renamed to the role-neutral `workers · main · <hash>` and `workers · <secondmate-id> · <hash>`; the rename is covered by unit tests and awaits a live lab refresh.
 List-live found both supervisor and worker containers within the owning home, and exact cleanup preserved sibling tasks.
 All adapter calls and test probes passed through the named-session lab helper, whose teardown verified that the default session was unchanged.
 

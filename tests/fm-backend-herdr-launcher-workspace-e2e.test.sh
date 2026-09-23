@@ -24,6 +24,12 @@ set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+expected_worker_label() {  # <main|secondmate-id>
+  local tag
+  tag=$(FM_HOME=/nonexistent FM_ROOT="$ROOT" bash -c '. "$0/bin/fm-backend-hometag-lib.sh"; fm_backend_hometag' "$ROOT")
+  printf 'workers · %s · %s' "$1" "${tag##*-}"
+}
+
 fail() { printf 'not ok - %s\n' "$1" >&2; cleanup_all; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 assert_contains_local() {  # <haystack> <needle> <msg>
@@ -228,7 +234,7 @@ UNIQA_PANE=$(grep '^herdr_pane_id=' "$UNIQA_META" | cut -d= -f2-)
 [ -n "$UNIQA_PANE" ] || fail "uniqA meta is missing herdr_pane_id"
 WS_WORKERS=$(workspace_of_pane "$UNIQA_PANE")
 [ -n "$WS_WORKERS" ] || fail "could not read uniqA's workspace"
-[ "$(label_of_workspace "$WS_WORKERS")" = workers ] || fail "uniqA did not land in its separate worker container"
+[ "$(label_of_workspace "$WS_WORKERS")" = "$(expected_worker_label main)" ] || fail "uniqA did not land in its separate worker container"
 [ "$(focused_workspace)" = "$WS_OTHER" ] || fail "the spawn stole focus from the captain's workspace"
 pass "real herdr E2E: with no Herdr parent, a crewmate uses its home's separate worker container without stealing focus"
 
@@ -404,7 +410,7 @@ SME_META="$SM_HOME/state/smE.meta"
 record_worktree "$SME_META"
 SME_PANE=$(grep '^herdr_pane_id=' "$SME_META" | cut -d= -f2-)
 SME_WS=$(workspace_of_pane "$SME_PANE")
-[ "$SME_WS" != "$WS_SM_LAUNCH" ] && [ "$(label_of_workspace "$SME_WS")" = "workers-$SM_ID" ] \
+[ "$SME_WS" != "$WS_SM_LAUNCH" ] && [ "$(label_of_workspace "$SME_WS")" = "$(expected_worker_label "$SM_ID")" ] \
   || fail "a secondmate's worker must use its separate worker container, got '$SME_WS'"
 [ "$(tab_labels_of_workspace "$WS_SM_DECOY")" = "$WS_SM_DECOY_TABS_BEFORE" ] \
   || fail "the duplicate secondmate-labeled workspace was mutated"

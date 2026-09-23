@@ -90,8 +90,9 @@
 #   A Herdr worker never joins a supervisor's home workspace. Its own
 #   presentation workspace is ordered beneath the launcher's exact workspace,
 #   read from the launcher pane rather than inferred from labels. Degraded or
-#   disabled projection uses a separate role-neutral flat container, "workers"
-#   or "workers-<secondmate-id>"; a proven agent-free husk of the same task in
+#   disabled projection uses a separate role-neutral flat container,
+#   "workers · <main|secondmate-id> · <installation-hash>"; a proven
+#   agent-free husk of the same task in
 #   the legacy or worker container is closed once its replacement exists.
 #   Claimed but unreadable, contradictory, stale, or cross-session launcher
 #   identity refuses before creation. Without Herdr ancestry, the parent and
