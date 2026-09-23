@@ -148,6 +148,8 @@ jq_state() { jq "$@" "$STATE"; }
 save() { local tmp="$STATE.tmp.$$"; cat > "$tmp" && mv "$tmp" "$STATE"; }
 
 cmd=${1:-}; sub=${2:-}
+# FM_FAKE_HERDR_DROP_EMPTIED=1: closing a workspace's last tab removes the
+# workspace, as real Herdr does.
 # FM_FAKE_HERDR_LIST_BARRIER=<n>: each workspace list snapshots the state, then
 # waits until <n> lists have snapshotted, so concurrent callers all observe the
 # same pre-mutation state regardless of scheduling.
@@ -210,11 +212,30 @@ case "$cmd $sub" in
     ;;
   "pane close")
     pane=${3:-}
-    jq_state --arg p "$pane" '.tabs |= [.[]|select(.pane_id != $p)]' | save
+    jq_state --arg p "$pane" --argjson drop "${FM_FAKE_HERDR_DROP_EMPTIED:-0}" '([.tabs[]|select(.pane_id == $p and $drop == 1)|.workspace_id]) as $emptied
+      | .tabs |= [.[]|select(.pane_id != $p)]
+      | .tabs as $left
+      | .workspaces |= [.[]|select(.workspace_id as $w | ($emptied | index($w)) == null or any($left[]; .workspace_id == $w))]' | save
     ;;
   "tab close")
     tab=${3:-}
-    jq_state --arg t "$tab" '.tabs |= [.[]|select(.tab_id != $t)]' | save
+    jq_state --arg t "$tab" --argjson drop "${FM_FAKE_HERDR_DROP_EMPTIED:-0}" '([.tabs[]|select(.tab_id == $t and $drop == 1)|.workspace_id]) as $emptied
+      | .tabs |= [.[]|select(.tab_id != $t)]
+      | .tabs as $left
+      | .workspaces |= [.[]|select(.workspace_id as $w | ($emptied | index($w)) == null or any($left[]; .workspace_id == $w))]' | save
+    ;;
+  "pane get")
+    pane=${3:-}
+    jq_state -c --arg p "$pane" '[.tabs[]|select(.pane_id == $p)] as $m
+      | if ($m | length) == 1 then {result:{pane:{pane_id:$p, tab_id:$m[0].tab_id, workspace_id:$m[0].workspace_id}}}
+        else {error:{code:"pane_not_found"}} end'
+    ;;
+  "pane process-info")
+    pane=${4:-}
+    if [ -n "${FM_FAKE_HERDR_SHELL_PID:-}" ]; then
+      jq -cn --arg p "$pane" --argjson pid "$FM_FAKE_HERDR_SHELL_PID" \
+        '{result:{type:"pane_process_info",process_info:{pane_id:$p,shell_pid:$pid,foreground_processes:[{pid:$pid,name:"zsh",argv:["zsh"]}]}}}'
+    fi
     ;;
   "agent get")
     pane=${3:-}
@@ -1049,10 +1070,8 @@ test_worker_fallback_ignores_a_users_workers_workspace() {
   dir="$TMP_ROOT/worker-user-workspace"; mkdir -p "$dir/responses" "$dir/home"; log="$dir/log"; resp="$dir/responses"; : > "$log"
   home="$dir/home"; label=$(worker_label_for "$home")
   workspace_list_json w1 firstmate w8 workers w9 workers > "$resp/1.out"
-  : > "$dir/fmtest.sock"
-  jq -cn --arg sock "$dir/fmtest.sock" '{sessions:[{name:"fmtest",running:true,socket_path:$sock}]}' > "$resp/2.out"
-  cp "$resp/1.out" "$resp/3.out"
-  printf '{"result":{"workspace":{"workspace_id":"w5"},"tab":{"tab_id":"w5:t1"}}}\n' > "$resp/4.out"
+  printf '{"result":{"workspace":{"workspace_id":"w5"},"tab":{"tab_id":"w5:t1"},"root_pane":{"pane_id":"w5:p1"}}}\n' > "$resp/2.out"
+  workspace_list_json w1 firstmate w8 workers w9 workers w5 "$label" > "$resp/3.out"
   fb=$(make_herdr_fakebin "$dir")
   out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
     bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /tmp worker-home' "$ROOT")
@@ -1079,54 +1098,126 @@ test_worker_fallback_ignores_a_users_workers_workspace() {
   pass "Herdr worker placement and discovery ignore a user's own 'workers' workspaces"
 }
 
-# Two degraded launches in one home that both find no worker container must
-# not each create one: the second rechecks under the session presentation lock
-# and adopts the first's, so the preflight keeps admitting spawns.
-test_concurrent_worker_fallbacks_share_one_container() {
-  local dir fb home label run pid_a pid_b status count out
-  dir="$TMP_ROOT/worker-fallback-race"; mkdir -p "$dir/home"; : > "$dir/log"
-  home="$dir/home"; label=$(worker_label_for "$home")
-  : > "$dir/fmtest.sock"
-  fb=$(make_herdr_statefake "$dir")
-  run() {
-    PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$dir/state.json" \
-      FM_FAKE_HERDR_SOCKET="$dir/fmtest.sock" FM_FAKE_HERDR_LIST_BARRIER=2 \
-      bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /tmp worker-home' "$ROOT"
-  }
-  run > "$dir/a.out" 2> "$dir/a.err" & pid_a=$!
-  run > "$dir/b.out" 2> "$dir/b.err" & pid_b=$!
-  wait "$pid_a" || fail "first concurrent worker fallback failed: $(cat "$dir/a.err")"
-  wait "$pid_b" || fail "second concurrent worker fallback failed: $(cat "$dir/b.err")"
-  count=$(jq --arg l "$label" '[.workspaces[] | select(.label == $l)] | length' "$dir/state.json")
-  [ "$count" = 1 ] || fail "concurrent worker fallbacks created $count containers labeled '$label'"
-  [ "$(cat "$dir/a.out")" = "$(cat "$dir/b.out")" ] \
-    || fail "concurrent worker fallbacks used different containers: $(cat "$dir/a.out") vs $(cat "$dir/b.out")"
-  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$dir/log" FM_FAKE_HERDR_STATE="$dir/state.json" \
-    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_worker_container_preflight fmtest fm-task' "$ROOT" 2>&1)
-  status=$?
-  expect_code 0 "$status" "preflight refused placement after concurrent worker fallbacks: $out"
-  pass "concurrent Herdr worker fallbacks in one home share one container"
+# Worker-container fixture over the stateful fake: a focused captain workspace,
+# a real idle process standing in for every seeded pane's lone shell, and the
+# named session's socket for the presentation lock path.
+worker_container_fixture() {  # <dir>
+  local dir=$1
+  mkdir -p "$dir/home"; : > "$dir/log"; : > "$dir/fmtest.sock"
+  make_herdr_statefake "$dir" > "$dir/fakebin.path"
+  printf '%s\n' '{"next":1,"workspaces":[{"workspace_id":"c1","label":"captain","focused":true,"active_tab_id":"c1:t1"}],"tabs":[{"tab_id":"c1:t1","label":"1","workspace_id":"c1","pane_id":"c1:p1","focused":true}],"agent_status":{}}' > "$dir/state.json"
+  sleep 300 &
+  printf '%s\n' "$!" > "$dir/shell.pid"
 }
 
-test_worker_fallback_create_refuses_without_the_session_lock() {
-  local dir out status
-  dir="$TMP_ROOT/worker-fallback-lock-refusal"; mkdir -p "$dir"; : > "$dir/cli.log"
-  out=$(ROOT="$ROOT" CLI_LOG="$dir/cli.log" bash -c '
-    . "$ROOT/bin/backends/herdr.sh"
-    fm_backend_herdr_presentation_session_lock_path() { printf "/tmp/fm-herdr-contended-test-lock"; }
-    fm_lock_try_acquire() { return 1; }
-    sleep() { :; }
-    fm_backend_herdr_cli() {
-      printf "%s\n" "$*" >> "$CLI_LOG"
-      [ "$2 $3" != "workspace list" ] || printf "{\"result\":{\"workspaces\":[]}}\n"
-    }
-    fm_backend_herdr_workspace_ensure fmtest /tmp worker-home
-  ' 2>&1)
+worker_container_run() {  # <dir> <bash-snippet> [extra env assignments...]
+  local dir=$1 snippet=$2
+  shift 2
+  env PATH="$(cat "$dir/fakebin.path"):$PATH" FM_HOME="$dir/home" FM_HERDR_LOG="$dir/log" \
+    FM_FAKE_HERDR_STATE="$dir/state.json" FM_FAKE_HERDR_SOCKET="$dir/fmtest.sock" \
+    FM_FAKE_HERDR_SHELL_PID="$(cat "$dir/shell.pid")" FM_FAKE_HERDR_DROP_EMPTIED=1 FM_BACKEND_HERDR_IDLE_SHELL_PROOF_POLLS=1 "$@" \
+    bash -c ". \"\$0/bin/backends/herdr.sh\"; $snippet" "$ROOT"
+}
+
+# One degraded launch: ensure the worker container, then create its task tab.
+# shellcheck disable=SC2016  # expanded by the launch's own shell
+WORKER_LAUNCH_SNIPPET='raw=$(fm_backend_herdr_container_ensure /tmp worker-home fmtest) || exit 1
+  container=${raw%%	*}; seeded=${raw#*	}
+  fm_backend_herdr_create_task "$container" "$TASK" /tmp "$seeded" >/dev/null || exit 1
+  printf "%s" "$container"'
+
+# Two degraded launches in one home that both find no worker container each
+# create one; the listing's first wins, the other creator closes only its own
+# still-seeded workspace, and both workers land in the one survivor.
+test_concurrent_worker_fallbacks_share_one_container() {
+  local dir label pid_a pid_b status count out
+  dir="$TMP_ROOT/worker-fallback-race"
+  worker_container_fixture "$dir"
+  label=$(worker_label_for "$dir/home")
+  worker_container_run "$dir" "$WORKER_LAUNCH_SNIPPET" TASK=fm-race-a FM_FAKE_HERDR_LIST_BARRIER=2 \
+    > "$dir/a.out" 2> "$dir/a.err" & pid_a=$!
+  worker_container_run "$dir" "$WORKER_LAUNCH_SNIPPET" TASK=fm-race-b FM_FAKE_HERDR_LIST_BARRIER=2 \
+    > "$dir/b.out" 2> "$dir/b.err" & pid_b=$!
+  wait "$pid_a" || fail "first concurrent worker fallback failed: $(cat "$dir/a.err")"
+  wait "$pid_b" || fail "second concurrent worker fallback failed: $(cat "$dir/b.err")"
+  kill "$(cat "$dir/shell.pid")" 2>/dev/null || true
+  count=$(jq --arg l "$label" '[.workspaces[] | select(.label == $l)] | length' "$dir/state.json")
+  [ "$count" = 1 ] || fail "concurrent worker fallbacks left $count containers labeled '$label'"
+  [ "$(cat "$dir/a.out")" = "$(cat "$dir/b.out")" ] \
+    || fail "concurrent worker fallbacks used different containers: $(cat "$dir/a.out") vs $(cat "$dir/b.out")"
+  out=$(jq -r --arg l "$label" '(.workspaces[] | select(.label == $l) | .workspace_id) as $w
+    | [.tabs[] | select(.workspace_id == $w) | .label] | sort | join(",")' "$dir/state.json")
+  [ "$out" = "fm-race-a,fm-race-b" ] || fail "concurrent worker fallbacks did not both land in the survivor: $out"
+  [ "$(jq -r '.workspaces[] | select(.focused == true) | .workspace_id' "$dir/state.json")" = c1 ] \
+    || fail "converging concurrent worker containers moved the captain's focus"
+  out=$(worker_container_run "$dir" 'fm_backend_herdr_worker_container_preflight fmtest fm-task' 2>&1)
   status=$?
-  expect_code 3 "$status" "worker container create without the session lock must refuse: $out"
-  assert_contains "$out" "refusing an unserialized create" "worker container lock refusal did not explain itself"
-  assert_not_contains "$(cat "$dir/cli.log")" "workspace create" "worker container was created without the session lock"
-  pass "Herdr worker container creation refuses when the session presentation lock is contended"
+  expect_code 0 "$status" "preflight refused placement after concurrent worker fallbacks: $out"
+  pass "concurrent Herdr worker fallbacks in one home converge on one container holding both workers"
+}
+
+# A home's first fallback while another spawn holds the session presentation
+# lock still creates its role-neutral worker container and its worker.
+test_worker_fallback_succeeds_while_the_presentation_lock_is_held() {
+  local dir label lock holder out status
+  dir="$TMP_ROOT/worker-fallback-contended"
+  worker_container_fixture "$dir"
+  label=$(worker_label_for "$dir/home")
+  lock=$(worker_container_run "$dir" 'fm_backend_herdr_presentation_session_lock_path fmtest') \
+    || fail "could not resolve the fixture's session presentation lock"
+  ROOT="$ROOT" LOCK="$lock" READY="$dir/ready" RELEASE="$dir/release" bash -c '
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$LOCK" || exit 1
+    : > "$READY"
+    while [ ! -e "$RELEASE" ]; do sleep 0.05; done
+    fm_lock_release "$LOCK"
+  ' & holder=$!
+  while [ ! -e "$dir/ready" ] && kill -0 "$holder" 2>/dev/null; do sleep 0.01; done
+  [ -e "$dir/ready" ] || fail "could not hold the fixture's session presentation lock"
+  out=$(worker_container_run "$dir" "$WORKER_LAUNCH_SNIPPET" TASK=fm-contended 2>&1)
+  status=$?
+  : > "$dir/release"; wait "$holder" || true
+  kill "$(cat "$dir/shell.pid")" 2>/dev/null || true
+  expect_code 0 "$status" "a first worker fallback under a held presentation lock must still launch: $out"
+  out=$(jq -r --arg l "$label" '(.workspaces[] | select(.label == $l) | .workspace_id) as $w
+    | [.tabs[] | select(.workspace_id == $w) | .label] | join(",")' "$dir/state.json")
+  [ "$out" = fm-contended ] || fail "contended first fallback did not place its worker in '$label': $out"
+  pass "a home's first Herdr worker fallback succeeds while the presentation lock is held"
+}
+
+# A losing creator never closes a workspace it cannot prove is still its own
+# untouched seeded container; both stay and placement refuses.
+test_worker_container_converge_keeps_unprovable_duplicates() {
+  local dir label mode create out status before
+  for mode in extra-tab agent foreign-seed; do
+    dir="$TMP_ROOT/worker-converge-$mode"
+    worker_container_fixture "$dir"
+    label=$(worker_label_for "$dir/home")
+    jq --arg l "$label" '.workspaces += [{workspace_id:"w1",label:$l},{workspace_id:"w2",label:$l}]
+      | .tabs += [{tab_id:"w1:t1",label:"fm-a",workspace_id:"w1",pane_id:"w1:p1"},
+                  {tab_id:"w2:t2",label:"1",workspace_id:"w2",pane_id:"w2:p2"}]' \
+      "$dir/state.json" > "$dir/state.tmp" && mv "$dir/state.tmp" "$dir/state.json"
+    create='{"result":{"workspace":{"workspace_id":"w2"},"tab":{"tab_id":"w2:t2"},"root_pane":{"pane_id":"w2:p2"}}}'
+    case "$mode" in
+      extra-tab)
+        jq '.tabs += [{tab_id:"w2:t3",label:"fm-other",workspace_id:"w2",pane_id:"w2:p3"}]' \
+          "$dir/state.json" > "$dir/state.tmp" && mv "$dir/state.tmp" "$dir/state.json" ;;
+      agent) fake_herdr_set_agent_status "$dir/state.json" w2:p2 idle ;;
+      foreign-seed) create='{"result":{"workspace":{"workspace_id":"w2"},"tab":{"tab_id":"w2:t9"},"root_pane":{"pane_id":"w2:p9"}}}' ;;
+    esac
+    before=$(jq -c '.workspaces, .tabs' "$dir/state.json")
+    : > "$dir/log"
+    # shellcheck disable=SC2016  # expanded by the converging shell
+    out=$(worker_container_run "$dir" 'fm_backend_herdr_worker_container_converge fmtest "$LABEL" "$CREATE"' \
+      LABEL="$label" CREATE="$create" 2>&1)
+    status=$?
+    kill "$(cat "$dir/shell.pid")" 2>/dev/null || true
+    expect_code 1 "$status" "$mode: an unprovable losing container must not be converged: $out"
+    assert_contains "$out" "could not be reduced to one" "$mode: unprovable duplicate refusal did not explain itself"
+    [ "$(jq -c '.workspaces, .tabs' "$dir/state.json")" = "$before" ] || fail "$mode: an unprovable duplicate was mutated"
+    assert_not_contains "$(cat "$dir/log")" $'\x1fpane\x1fclose' "$mode: an unprovable duplicate was closed"
+  done
+  pass "Herdr worker-container convergence leaves occupied, agent-bearing, or unowned duplicates untouched"
 }
 
 test_worker_container_preflight_refuses_legacy_and_fallback_duplicates() {
@@ -5542,7 +5633,8 @@ test_worker_container_preflight_refuses_legacy_and_fallback_duplicates
 test_worker_workspace_label_is_role_neutral
 test_worker_fallback_ignores_a_users_workers_workspace
 test_concurrent_worker_fallbacks_share_one_container
-test_worker_fallback_create_refuses_without_the_session_lock
+test_worker_fallback_succeeds_while_the_presentation_lock_is_held
+test_worker_container_converge_keeps_unprovable_duplicates
 test_worker_husk_in_legacy_supervisor_workspace_is_closed_after_replacement
 test_workspace_ensure_prefers_the_launcher_over_the_first_label_match
 test_workspace_ensure_refuses_an_ambiguous_label_with_no_launcher

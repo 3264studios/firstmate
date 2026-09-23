@@ -2043,6 +2043,48 @@ fm_backend_herdr_workspace_unique() {  # <session> <label>
   printf '%s' "${matches%%$'\n'*}"
 }
 
+# fm_backend_herdr_worker_container_converge: after this invocation created a
+# worker container from <create-response>, settle concurrent same-label creates
+# without a lock. The first exact-label match in Herdr's listing wins. A loser
+# closes only its own just-created workspace, by the exact seeded pane id its
+# create response returned, and only while that workspace still holds exactly
+# that seeded tab and pane and the pane is a lone no-agent shell; it then adopts
+# the winner. Anything unproven keeps both and reports the ambiguity (return 1).
+# Sets FM_BACKEND_HERDR_WS_ID to the workspace the caller must use.
+fm_backend_herdr_worker_container_converge() {  # <session> <label> <create-response>
+  local session=$1 label=$2 out=$3 wsid tab pane matches winner tabs panes
+  FM_BACKEND_HERDR_WS_ID=""
+  wsid=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
+  tab=$(printf '%s' "$out" | jq -r '.result.tab.tab_id // empty' 2>/dev/null)
+  pane=$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id // empty' 2>/dev/null)
+  matches=$(fm_backend_herdr_workspace_find_all "$session" "$label")
+  winner=${matches%%$'\n'*}
+  if [ "$winner" = "$wsid" ]; then
+    FM_BACKEND_HERDR_WS_ID=$wsid
+    return 0
+  fi
+  if [ -n "$winner" ] && [ -n "$tab" ] && [ -n "$pane" ] &&
+    printf '%s\n' "$matches" | grep -Fqx -- "$wsid" &&
+    tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$wsid" 2>/dev/null) &&
+    panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$wsid" 2>/dev/null) &&
+    printf '%s' "$tabs" | jq -e --arg tab "$tab" \
+      '(.result.tabs | type) == "array" and (.result.tabs | length) == 1 and .result.tabs[0].tab_id == $tab' >/dev/null 2>&1 &&
+    printf '%s' "$panes" | jq -e --arg tab "$tab" --arg pane "$pane" \
+      '(.result.panes | type) == "array" and (.result.panes | length) == 1
+       and .result.panes[0].pane_id == $pane and .result.panes[0].tab_id == $tab' >/dev/null 2>&1 &&
+    [ "$(fm_backend_herdr_pane_process_state "$session" "$pane")" = shell ] &&
+    fm_backend_herdr_projection_close_pane_focus_preserving "$session" "$pane" no-agent &&
+    [ "$(fm_backend_herdr_workspace_presence_state "$session" "$wsid")" = dead ]; then
+    matches=$(fm_backend_herdr_workspace_find_all "$session" "$label")
+    if [ "${matches%%$'\n'*}" = "$winner" ]; then
+      FM_BACKEND_HERDR_WS_ID=$winner
+      return 0
+    fi
+  fi
+  echo "error: concurrent herdr worker containers labeled '$label' in session '$session' (${matches//$'\n'/ }) could not be reduced to one; rename or close the extras" >&2
+  return 1
+}
+
 # fm_backend_herdr_workspace_ensure: the workspace this spawn's task tab
 # belongs in inside <session> - the launching agent's own exact workspace when
 # it has one, otherwise this HOME's persistent workspace, created in <cwd> if
@@ -2099,7 +2141,7 @@ fm_backend_herdr_workspace_unique() {  # <session> <label>
 # Returns 0 on success, 3 for a refusal whose exact reason is already on
 # stderr, and 1 for a failed or unparseable herdr call.
 fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship>]
-  local session=$1 cwd=$2 relationship=${3:-launcher-home} wsid out label status lock=
+  local session=$1 cwd=$2 relationship=${3:-launcher-home} wsid out label status
   FM_BACKEND_HERDR_WS_ID=""
   FM_BACKEND_HERDR_WS_SEEDED_TAB_ID=""
   if [ "$relationship" = launcher-home ] || [ "$relationship" = worker-home ]; then
@@ -2119,30 +2161,21 @@ fm_backend_herdr_workspace_ensure() {  # <session> <cwd> [<launcher-relationship
   label=$(fm_backend_herdr_workspace_label)
   [ "$relationship" != worker-home ] || label=$(fm_backend_herdr_worker_workspace_label)
   wsid=$(fm_backend_herdr_workspace_unique "$session" "$label") || return 3
-  if [ -z "$wsid" ] && [ "$relationship" = worker-home ]; then
-    # Concurrent degraded launches in one home would otherwise each create a
-    # same-labeled worker container, which the preflight then refuses forever.
-    if ! fm_backend_herdr_presentation_session_lock_acquire "$session"; then
-      echo "error: could not acquire the herdr session presentation lock to create worker container '$label' in session '$session'; refusing an unserialized create" >&2
-      return 3
-    fi
-    lock=$FM_BACKEND_HERDR_SESSION_LOCK
-    wsid=$(fm_backend_herdr_workspace_unique "$session" "$label") || {
-      fm_lock_release "$lock" || true
-      return 3
-    }
-  fi
   if [ -n "$wsid" ]; then
-    [ -z "$lock" ] || fm_lock_release "$lock" || true
     FM_BACKEND_HERDR_WS_ID=$wsid
     printf '%s' "$wsid"
     return 0
   fi
-  out=$(fm_backend_herdr_cli "$session" workspace create --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) && status=0 || status=1
-  [ -z "$lock" ] || fm_lock_release "$lock" || true
-  [ "$status" -eq 0 ] || return 1
+  out=$(fm_backend_herdr_cli "$session" workspace create --cwd "$cwd" --label "$label" --no-focus 2>/dev/null) || return 1
   wsid=$(printf '%s' "$out" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null)
   [ -n "$wsid" ] || return 1
+  if [ "$relationship" = worker-home ]; then
+    fm_backend_herdr_worker_container_converge "$session" "$label" "$out" || return 3
+    if [ "$FM_BACKEND_HERDR_WS_ID" != "$wsid" ]; then
+      printf '%s' "$FM_BACKEND_HERDR_WS_ID"
+      return 0
+    fi
+  fi
   FM_BACKEND_HERDR_WS_ID=$wsid
   # Herdr seeds a new workspace with one auto-created default tab firstmate
   # never uses. It is NOT pruned here: at this instant it is the workspace's
