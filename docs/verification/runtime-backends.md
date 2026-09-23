@@ -1204,8 +1204,7 @@ HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \
   tests/fm-backend-herdr-workspace-per-home-e2e.test.sh
 ```
 
-Refreshed on 2026-09-22 against Herdr 0.8.2 protocol 20: the primary worker used `workers-firstmate`, the secondmate supervisor retained `2ndmate-e2esm1`, and its child used `workers-2ndmate-e2esm1`.
-Those fallback labels were later renamed to the role-neutral `workers · main · <hash>` and `workers · <secondmate-id> · <hash>`; the rename is covered by unit tests and awaits a live lab refresh.
+Refreshed on 2026-09-22 against Herdr 0.8.2 protocol 20: the primary worker used the role-neutral `workers · main · <hash>` container, the secondmate supervisor retained `2ndmate-<secondmate-id>`, and its child used `workers · <secondmate-id> · <hash>`.
 List-live found both supervisor and worker containers within the owning home, and exact cleanup preserved sibling tasks.
 All adapter calls and test probes passed through the named-session lab helper, whose teardown verified that the default session was unchanged.
 
@@ -1228,6 +1227,8 @@ ok - real Herdr lab: legacy projection labels and flat secondmate tabs are left 
 ok - real Herdr lab validation completed on Herdr 0.8.2 with the default-session tripwire intact
 FM_TEST_SUMMARY total=5 failed=0 skipped_gate=0 duration_ms=974356
 ```
+
+After the fallback-label rename, the three real-Herdr suites were rerun individually through the same lab helper; each exited 0 with the default-session tripwire intact.
 
 The portable regressions in `tests/fm-backend-herdr.test.sh` cover separate fallback placement, legacy/new-container discovery, live or unreadable duplicate refusal, split-tab refusal, incomplete missing-token snapshots, and preservation of journals bound to another home or session.
 `tests/fm-control-relaunch.test.sh` verifies recorded-session pinning, intact-endpoint reuse, work preservation, and refusal of live or ambiguous endpoints.
