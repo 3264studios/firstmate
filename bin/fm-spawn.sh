@@ -90,7 +90,9 @@
 #   A Herdr worker never joins a supervisor's home workspace. Its own
 #   presentation workspace is ordered beneath the launcher's exact workspace,
 #   read from the launcher pane rather than inferred from labels. Degraded or
-#   disabled projection uses a separate workers-<home-label> flat container.
+#   disabled projection uses a separate role-neutral flat container, "workers"
+#   or "workers-<secondmate-id>"; a proven agent-free husk of the same task in
+#   the legacy or worker container is closed once its replacement exists.
 #   Claimed but unreadable, contradictory, stale, or cross-session launcher
 #   identity refuses before creation. Without Herdr ancestry, the parent and
 #   fallback container each require a unique label match. --secondmate still
@@ -1112,6 +1114,13 @@ RELAUNCH_REPLACEMENT_STATE=
 RELAUNCH_REPLACEMENT_WT=
 CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
+SPAWN_SUMMARY_REFRESH_PENDING=0
+
+spawn_summary_refresh_pending() {
+  [ "$SPAWN_SUMMARY_REFRESH_PENDING" = 1 ] || return 0
+  SPAWN_SUMMARY_REFRESH_PENDING=0
+  "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
+}
 
 spawn_fresh_commit_rollback() {
   if fm_backlog_atomic_transition rollback "$STATE/$ID.meta" \
@@ -1270,6 +1279,7 @@ spawn_abort_cleanup() {
     CONFIG_INHERIT_LOCK_HELD=0
     fm_lock_release "$CONFIG_INHERIT_LOCK" || true
   fi
+  spawn_summary_refresh_pending
   return "$status"
 }
 trap spawn_abort_cleanup EXIT
@@ -1281,6 +1291,10 @@ spawn_herdr_presentation_order_lock_acquire() {
   local session=${1:-} attempt lock_path
   [ -n "$session" ] || session=$(fm_backend_herdr_session)
   lock_path=$(fm_backend_herdr_presentation_session_lock_path "$session") || return 1
+  if [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" = 1 ]; then
+    [ "$lock_path" = "$HERDR_PRESENTATION_ORDER_LOCK" ]
+    return
+  fi
   HERDR_PRESENTATION_ORDER_LOCK="$lock_path"
   attempt=0
   while [ "$attempt" -lt 50 ]; do
@@ -3241,9 +3255,10 @@ spawn_herdr_endpoint() { # <endpoint-cwd> [<recorded-session>]
       # live named-session socket before journal publication.
       if ! fm_backend_herdr_server_ensure "$HERDR_SES"; then
         echo "warning: herdr presentation could not ensure its session server; using the ordinary flat layout without projection" >&2
+        spawn_herdr_presentation_order_lock_release
       elif [ "${FM_BACKEND_HERDR_PRESENTATION_PREFERENCE:-default}" = default ] &&
         ! fm_backend_herdr_presentation_default_supported "$STATE" "$HERDR_SES"; then
-        :
+        spawn_herdr_presentation_order_lock_release
       elif spawn_herdr_presentation_order_lock_acquire "$HERDR_SES"; then
         # The projected child is placed and bound UNDER this launcher's exact
         # parent workspace. Its own herdr pane identity names that workspace
@@ -3336,7 +3351,7 @@ EOF
     exit 1
   fi
   T="$HERDR_SES:$HERDR_PANE_ID"
-
+  fm_backend_herdr_worker_husks_close "$HERDR_SES" "$W"
 }
 
 W="fm-$ID"
@@ -4561,11 +4576,11 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
 # This side-band cache has its own home lock and can wait up to 60 seconds.
-# A projected spawn defers it until handoff so unrelated homes can recover
-# within the presentation lock's bounded wait. No endpoint proof depends on it.
-if [ "${HERDR_PROJECTED:-0}" -ne 1 ]; then
-  "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
-fi
+# A projected spawn defers it until the presentation lock is released, on
+# handoff or any later exit, so unrelated homes can recover within that lock's
+# bounded wait. No endpoint proof depends on it.
+SPAWN_SUMMARY_REFRESH_PENDING=1
+[ "${HERDR_PROJECTED:-0}" -eq 1 ] || spawn_summary_refresh_pending
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
@@ -4813,9 +4828,7 @@ if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   spawn_herdr_presentation_order_lock_release
 fi
 spawn_send_key "$T" Enter
-if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
-  "$SCRIPT_DIR/fm-home-summary-refresh.sh" --best-effort || true
-fi
+spawn_summary_refresh_pending
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
     kimi_spawn_fail "$KIMI_READY_FAILURE_DETAIL"

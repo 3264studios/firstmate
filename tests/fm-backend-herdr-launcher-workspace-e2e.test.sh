@@ -228,7 +228,7 @@ UNIQA_PANE=$(grep '^herdr_pane_id=' "$UNIQA_META" | cut -d= -f2-)
 [ -n "$UNIQA_PANE" ] || fail "uniqA meta is missing herdr_pane_id"
 WS_WORKERS=$(workspace_of_pane "$UNIQA_PANE")
 [ -n "$WS_WORKERS" ] || fail "could not read uniqA's workspace"
-[ "$(label_of_workspace "$WS_WORKERS")" = workers-firstmate ] || fail "uniqA did not land in its separate worker container"
+[ "$(label_of_workspace "$WS_WORKERS")" = workers ] || fail "uniqA did not land in its separate worker container"
 [ "$(focused_workspace)" = "$WS_OTHER" ] || fail "the spawn stole focus from the captain's workspace"
 pass "real herdr E2E: with no Herdr parent, a crewmate uses its home's separate worker container without stealing focus"
 
@@ -404,7 +404,7 @@ SME_META="$SM_HOME/state/smE.meta"
 record_worktree "$SME_META"
 SME_PANE=$(grep '^herdr_pane_id=' "$SME_META" | cut -d= -f2-)
 SME_WS=$(workspace_of_pane "$SME_PANE")
-[ "$SME_WS" != "$WS_SM_LAUNCH" ] && [ "$(label_of_workspace "$SME_WS")" = "workers-2ndmate-$SM_ID" ] \
+[ "$SME_WS" != "$WS_SM_LAUNCH" ] && [ "$(label_of_workspace "$SME_WS")" = "workers-$SM_ID" ] \
   || fail "a secondmate's worker must use its separate worker container, got '$SME_WS'"
 [ "$(tab_labels_of_workspace "$WS_SM_DECOY")" = "$WS_SM_DECOY_TABS_BEFORE" ] \
   || fail "the duplicate secondmate-labeled workspace was mutated"

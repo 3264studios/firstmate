@@ -28,6 +28,8 @@ MOVE_CALL_LOG="$TMP_ROOT/workspace-move-calls.log"
 FOCUS_AUDIT_LOG="$TMP_ROOT/focus-audit.log"
 ACTIVE_SEEDED_CONTROL="$TMP_ROOT/active-seeded-control"
 POST_CREATE_ABORT_CONTROL="$TMP_ROOT/post-create-abort-control"
+LAUNCH_SEND_FAIL_CONTROL="$TMP_ROOT/launch-send-fail-control"
+LOCK_WATCH_LOG="$TMP_ROOT/lock-watch.log"
 mkdir -p "$FAKEBIN"
 : > "$HERDR_CALL_LOG"
 : > "$TREEHOUSE_CALL_LOG"
@@ -35,7 +37,7 @@ mkdir -p "$FAKEBIN"
 : > "$FOCUS_AUDIT_LOG"
 REAL_MOVER="$ROOT/bin/backends/herdr-workspace-move.py"
 export REAL_TREEHOUSE REAL_MOVER HERDR_CALL_LOG TREEHOUSE_CALL_LOG TREEHOUSE_LOCK_DIR MOVE_CALL_LOG FOCUS_AUDIT_LOG HERDR_ORIGINAL_PATH HERDR_LAB_HELPER
-export ACTIVE_SEEDED_CONTROL POST_CREATE_ABORT_CONTROL TMP_ROOT
+export ACTIVE_SEEDED_CONTROL POST_CREATE_ABORT_CONTROL LAUNCH_SEND_FAIL_CONTROL LOCK_WATCH_LOG TMP_ROOT
 
 # Log every production-adapter call, remove its already-validated trailing
 # session flag, and send the operation through the lab helper so that helper
@@ -134,6 +136,15 @@ if [ "${1:-} ${2:-}" = "pane get" ] && [ -d "$ACTIVE_SEEDED_CONTROL" ] \
   refusal_probe=1
   refusal_before=$(focus_snapshot || printf ambiguous/ambiguous)
 fi
+if [ -n "${LOCK_WATCH_PATH:-}" ]; then
+  printf '%s\t%s %s\n' "$(readlink "$LOCK_WATCH_PATH" 2>/dev/null || printf absent)" "${1:-}" "${2:-}" >> "$LOCK_WATCH_LOG"
+fi
+if [ "${1:-} ${2:-}" = "pane send-text" ] && [ -f "$LAUNCH_SEND_FAIL_CONTROL/task-pane" ] \
+   && [ "${3:-}" = "$(cat "$LAUNCH_SEND_FAIL_CONTROL/task-pane")" ]; then
+  case "${4:-}" in
+    ". "*launch.*) : > "$LAUNCH_SEND_FAIL_CONTROL/fired"; exit 1 ;;
+  esac
+fi
 before=
 [ -z "$mutation" ] || before=$(focus_snapshot || printf ambiguous/ambiguous)
 if out=$(env PATH="$HERDR_ORIGINAL_PATH" "$HERDR_LAB_HELPER" run "$HERDR_LAB_SESSION" "$@"); then
@@ -166,6 +177,10 @@ if [ "$status" -eq 0 ] && [ "$mutation" = tab-create ]; then
       task=${label#fm-}
       mkdir -p "$POST_CREATE_ABORT_CONTROL/$task"
       printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$POST_CREATE_ABORT_CONTROL/$task/task-pane"
+      ;;
+    fm-refresh-fail)
+      [ ! -d "$LAUNCH_SEND_FAIL_CONTROL" ] \
+        || printf '%s\n' "$(printf '%s' "$out" | jq -r '.result.root_pane.pane_id')" > "$LAUNCH_SEND_FAIL_CONTROL/task-pane"
       ;;
   esac
 fi
@@ -510,7 +525,8 @@ assert_no_projection_mutation_since() {  # <line-count> <case-name>
 # Both the control-plane rebind and an ordinary respawn must get a new child,
 # in both primary and secondmate homes, without changing the parent's focus.
 test_lost_worker_projection() {
-  local role mode home id project parent parent_tab parent_pane old_workspace old_pane old_worktree meta new_workspace
+  local role mode home id project parent parent_tab parent_pane old_workspace old_pane old_worktree meta new_workspace lock_path lock_holds
+  lock_path=$(session_presentation_lock_path) || fail "could not resolve the session presentation lock path"
   project="$TMP_ROOT/lost-projection-project"
   make_project "$project"
   for role in primary secondmate; do
@@ -546,15 +562,28 @@ test_lost_worker_projection() {
       if [ "$mode" = relaunch-no-journal ]; then
         rm "$home/state/$id.herdr-presentation"
       fi
+      : > "$LOCK_WATCH_LOG"
       if [ "$mode" != respawn ]; then
-        FM_GATE_REFUSE_BYPASS=1 FM_SPAWN_NO_GUARD=1 FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+        LOCK_WATCH_PATH=$lock_path FM_GATE_REFUSE_BYPASS=1 FM_SPAWN_NO_GUARD=1 FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
           "$ROOT/bin/fm-spawn.sh" "$id" --relaunch --harness "sh -c 'while :; do sleep 60; done'" \
           > "$TMP_ROOT/$id-recover.out" 2> "$TMP_ROOT/$id-recover.err" \
           || fail "$id relaunch failed: $(cat "$TMP_ROOT/$id-recover.err")"
         [ "$(sed -n 's/^worktree=//p' "$meta")" = "$old_worktree" ] || fail "$id relaunch changed worktrees"
       else
-        spawn_task "$id" "$home" "$project" > "$TMP_ROOT/$id-recover.out" 2> "$TMP_ROOT/$id-recover.err" \
+        LOCK_WATCH_PATH=$lock_path spawn_task "$id" "$home" "$project" > "$TMP_ROOT/$id-recover.out" 2> "$TMP_ROOT/$id-recover.err" \
           || fail "$id respawn failed: $(cat "$TMP_ROOT/$id-recover.err")"
+      fi
+      if [ "$mode" != relaunch-no-journal ]; then
+        # Journal recovery already holds the session lock when it proves the
+        # old token gone; the fresh projection must keep that exact hold.
+        lock_holds=$(awk -F '\t' '
+          $1 != "absent" { held = 1 }
+          held { print $1 }
+          held && $2 == "workspace create" { exit }
+        ' "$LOCK_WATCH_LOG" | sort -u)
+        [ -n "$lock_holds" ] && [ "$(printf '%s\n' "$lock_holds" | wc -l | tr -d '[:space:]')" = 1 ] \
+          && [ "$lock_holds" != absent ] \
+          || fail "$id recovery released or reacquired its presentation lock before creating the projection: $(cat "$LOCK_WATCH_LOG")"
       fi
       remember_meta_worktree "$meta" >/dev/null
       new_workspace=$(sed -n 's/^herdr_workspace_id=//p' "$meta")
@@ -573,6 +602,42 @@ test_lost_worker_projection() {
   done
 }
 test_lost_worker_projection
+
+# A projected spawn defers its home summary refresh until the presentation
+# lock is released. A launch-delivery failure after metadata publication must
+# still run that refresh on exit.
+test_projected_launch_failure_still_refreshes_summary() {
+  local home project parent parent_pane status
+  home="$TMP_ROOT/refresh-fail-home"
+  project="$TMP_ROOT/refresh-fail-project"
+  mkdir -p "$home/state" "$home/config" "$home/data"
+  printf 'on\n' > "$home/config/herdr-presentation-spaces"
+  make_project "$project"
+  write_ship_brief "$home" refresh-fail 'Force a launch delivery failure after metadata publication.'
+  parent=$(lab workspace create --cwd "$home" --label firstmate) || fail "could not create refresh-failure parent"
+  parent_pane=$(printf '%s' "$parent" | jq -r '.result.root_pane.pane_id')
+  mkdir -p "$LAUNCH_SEND_FAIL_CONTROL"
+  if spawn_task refresh-fail "$home" "$project" > "$TMP_ROOT/refresh-fail.out" 2> "$TMP_ROOT/refresh-fail.err"; then
+    status=0
+  else
+    status=$?
+  fi
+  [ "$status" -ne 0 ] || fail "forced launch delivery failure did not fail the spawn"
+  grep -F $'workspace\tcreate' "$HERDR_CALL_LOG" | grep -F $'└ refresh-fail · p:' >/dev/null 2>&1 \
+    || fail "refresh-failure fixture was not projected"
+  [ -e "$LAUNCH_SEND_FAIL_CONTROL/fired" ] \
+    || fail "refresh-failure fixture failed before launch delivery: $(cat "$TMP_ROOT/refresh-fail.err")"
+  [ -e "$home/state/home-summary.json" ] || [ -e "$home/state/.home-summary-refresh.log" ] \
+    || fail "failed projected launch skipped its deferred home summary refresh: $(cat "$TMP_ROOT/refresh-fail.err")"
+  rm -rf "$LAUNCH_SEND_FAIL_CONTROL"
+  if [ -e "$home/state/refresh-fail.meta" ]; then
+    teardown_task refresh-fail "$home" > "$TMP_ROOT/refresh-fail-teardown.out" 2> "$TMP_ROOT/refresh-fail-teardown.err" \
+      || fail "refresh-failure teardown failed: $(cat "$TMP_ROOT/refresh-fail-teardown.err")"
+  fi
+  lab pane close "$parent_pane" >/dev/null || fail "could not retire exact refresh-failure fixture parent"
+  pass "real Herdr lab: a projected launch failure after metadata publication still refreshes the home summary"
+}
+test_projected_launch_failure_still_refreshes_summary
 
 HOME_DIR="$TMP_ROOT/home"
 PROJECT_DIR="$TMP_ROOT/project"
@@ -615,7 +680,7 @@ remember_meta_worktree "$ANCHOR_META" >/dev/null
 WORKER_WSID=$(grep '^herdr_workspace_id=' "$ANCHOR_META" | cut -d= -f2-)
 [ -n "$WORKER_WSID" ] && [ "$WORKER_WSID" != "$FIRSTMATE_WSID" ] \
   || fail "fallback worker occupied its supervisor's workspace"
-[ "$(lab workspace get "$WORKER_WSID" | jq -r '.result.workspace.label')" = workers-firstmate ] \
+[ "$(lab workspace get "$WORKER_WSID" | jq -r '.result.workspace.label')" = workers ] \
   || fail "fallback worker container has the wrong label"
 
 # The same task id and project run once opted out and once projected, so
@@ -859,7 +924,7 @@ remember_meta_worktree "$ORDER_B_META" >/dev/null
 
 ORDER_LIST=$(lab workspace list) || fail "could not inspect concurrent presentation ordering"
 CREATED_LABELS=$(projection_labels_from_log "$PROJECTION_ORDER_START")
-EXPECTED_LABELS=$(printf 'firstmate\n%s\n%s\nworkers-firstmate\n2ndmate-alpha\n2ndmate-bravo' "$PROJECTED_LABEL" "$CREATED_LABELS")
+EXPECTED_LABELS=$(printf 'firstmate\n%s\n%s\nworkers\n2ndmate-alpha\n2ndmate-bravo' "$PROJECTED_LABEL" "$CREATED_LABELS")
 ACTUAL_LABELS=$(printf '%s' "$ORDER_LIST" | jq -r '.result.workspaces[].label')
 [ "$ACTUAL_LABELS" = "$EXPECTED_LABELS" ] || fail "workspace order was not firstmate, stable primary block, secondmates: $ACTUAL_LABELS"
 PRIMARY_IDS=$(printf '%s' "$ORDER_LIST" | jq -r '
@@ -1034,7 +1099,7 @@ for ROUND in 1 2 3; do
   finish_concurrent_teardown "focus-$ROUND-b" "$WAVE_B_TEARDOWN_STATUS" "$TMP_ROOT/focus-$ROUND-b-teardown.out" "$TMP_ROOT/focus-$ROUND-b-teardown.err"
   assert_focus_is "$CAPTAIN_FOCUS" "focus wave $ROUND concurrent teardowns"
   WAVE_REMAINING=$(lab workspace list | jq -r '.result.workspaces[].label')
-  [ "$WAVE_REMAINING" = $'firstmate\nworkers-firstmate\n2ndmate-alpha\n2ndmate-bravo' ] \
+  [ "$WAVE_REMAINING" = $'firstmate\nworkers\n2ndmate-alpha\n2ndmate-bravo' ] \
     || fail "focus wave $ROUND cleanup left a projected workspace behind: $WAVE_REMAINING"
 done
 pass "real Herdr lab: three repeated concurrent create/order/cleanup waves have zero active workspace or tab drift"
@@ -1203,9 +1268,9 @@ printf '%s' "$CROSS_LIST" | jq -e '
 PCW_LABEL=$(lab workspace get "$(grep '^herdr_workspace_id=' "$HOME_DIR/state/pcw.meta" | cut -d= -f2-)" | jq -r '.result.workspace.label')
 ACW_LABEL=$(lab workspace get "$(grep '^herdr_workspace_id=' "$SECOND_HOME_A/state/acw.meta" | cut -d= -f2-)" | jq -r '.result.workspace.label')
 BCW_LABEL=$(lab workspace get "$(grep '^herdr_workspace_id=' "$SECOND_HOME_B/state/bcw.meta" | cut -d= -f2-)" | jq -r '.result.workspace.label')
-case "$PCW_LABEL" in $'└ pcw · p:'*|workers-firstmate) ;; *) fail "cross-home primary label wrong: $PCW_LABEL" ;; esac
-case "$ACW_LABEL" in $'└ acw · p:'*|workers-2ndmate-alpha) ;; *) fail "cross-home A label wrong: $ACW_LABEL" ;; esac
-case "$BCW_LABEL" in $'└ bcw · p:'*|workers-2ndmate-bravo) ;; *) fail "cross-home B label wrong: $BCW_LABEL" ;; esac
+case "$PCW_LABEL" in $'└ pcw · p:'*|workers) ;; *) fail "cross-home primary label wrong: $PCW_LABEL" ;; esac
+case "$ACW_LABEL" in $'└ acw · p:'*|workers-alpha) ;; *) fail "cross-home A label wrong: $ACW_LABEL" ;; esac
+case "$BCW_LABEL" in $'└ bcw · p:'*|workers-bravo) ;; *) fail "cross-home B label wrong: $BCW_LABEL" ;; esac
 pass "real Herdr lab: concurrent primary/A/B spawns preserve parent order and exact focus"
 
 # Hold the shared session lock from a different home and force flat fallback.
@@ -1239,7 +1304,7 @@ grep -F "presentation focus lock unavailable; using the ordinary flat layout wit
 remember_meta_worktree "$SECOND_HOME_A/state/aflat.meta" >/dev/null
 AFLAT_WSID=$(grep '^herdr_workspace_id=' "$SECOND_HOME_A/state/aflat.meta" | cut -d= -f2-)
 AFLAT_LABEL=$(lab workspace get "$AFLAT_WSID" | jq -r '.result.workspace.label')
-[ "$AFLAT_LABEL" = workers-2ndmate-alpha ] \
+[ "$AFLAT_LABEL" = workers-alpha ] \
   || fail "cross-home lock contention did not use the separate secondmate worker container: $AFLAT_LABEL"
 [ ! -e "$SECOND_HOME_A/state/aflat.herdr-presentation" ] \
   || fail "cross-home lock contention published a projection journal"

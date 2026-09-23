@@ -13,8 +13,10 @@
 #
 # Container placement is owned by docs/herdr-backend.md "Presentation spaces".
 # A worker normally gets a disposable workspace containing its task pane;
-# disabled or degraded projection uses a separate workers-<home-label> flat
-# container. Supervisor home workspaces keep their existing names and tabs.
+# disabled or degraded projection uses a separate role-neutral flat container
+# ("workers" or "workers-<secondmate-id>"). Supervisor home workspaces keep
+# their existing names; a proven agent-free worker husk left in one is closed
+# only after its replacement exists.
 # A projection's random token and mutable label never authorize task ownership
 # or endpoint selection. A version 2 journal can participate in replacing only
 # its exact same-identity endpoint after metadata, home, session, workspace,
@@ -367,16 +369,27 @@ fm_backend_herdr_workspace_label() {
 
 # A degraded worker uses a separate per-home container. This is placement,
 # never endpoint authority; existing tasks keep their recorded pane IDs.
+# The label is role-neutral: "workers" for the primary home and
+# "workers-<secondmate-id>" for a secondmate home.
 fm_backend_herdr_worker_workspace_label() {
-  printf 'workers-%s' "$(fm_backend_herdr_workspace_label)"
+  local home
+  home=$(fm_backend_herdr_workspace_label)
+  case "$home" in
+    2ndmate-*) printf 'workers-%s' "${home#2ndmate-}" ;;
+    *) printf 'workers' ;;
+  esac
 }
 
 # Before creating a projected or fallback worker, refuse a surviving attempt
 # in either the legacy parent container or the separate worker container.
 # Labels select duplicate-refusal candidates only: this never adopts or closes
 # them. Recorded endpoints and projection journals retain their own guards.
+# Proven agent-free husks are recorded in FM_BACKEND_HERDR_WORKER_HUSKS as
+# "<workspace>\t<tab>\t<pane>" lines for fm_backend_herdr_worker_husks_close
+# once the replacement endpoint exists.
 fm_backend_herdr_worker_container_preflight() { # <session> <task-label>
   local session=$1 task_label=$2 parent_label worker_label parent='' status list workspaces workspace tabs tab panes pane
+  FM_BACKEND_HERDR_WORKER_HUSKS=
   fm_backend_herdr_server_ensure "$session" || return 1
   fm_backend_herdr_launcher_identity "$session" && status=0 || status=$?
   case "$status" in
@@ -422,12 +435,42 @@ fm_backend_herdr_worker_container_preflight() { # <session> <task-label>
         echo "error: herdr worker tab '$task_label' already exists in workspace $workspace; refusing duplicate launch" >&2
         return 1
       fi
+      FM_BACKEND_HERDR_WORKER_HUSKS="${FM_BACKEND_HERDR_WORKER_HUSKS}${workspace}"$'\t'"${tab}"$'\t'"${pane}"$'\n'
     done <<EOF
 $tabs
 EOF
   done <<EOF
 $workspaces
 EOF
+}
+
+# Close the husks the preflight proved, only after the replacement endpoint
+# exists. Each tab must still carry <task-label>, still hold its recorded pane,
+# still classify as a husk, and share its workspace with another tab, so a
+# close never deletes a workspace or touches an agent-bearing or ambiguous tab.
+# Best-effort: a husk that cannot be proven again is left in place.
+fm_backend_herdr_worker_husks_close() { # <session> <task-label>
+  local session=$1 task_label=$2 workspace tab pane tabs panes
+  while IFS=$'\t' read -r workspace tab pane; do
+    [ -n "$pane" ] || continue
+    tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$workspace" 2>/dev/null) || continue
+    printf '%s' "$tabs" | jq -e --arg tab "$tab" --arg want "$task_label" '
+      (.result.tabs | type) == "array"
+      and ([.result.tabs[] | select(.tab_id == $tab and .label == $want)] | length) == 1
+      and (.result.tabs | length) > 1
+    ' >/dev/null 2>&1 || continue
+    panes=$(fm_backend_herdr_cli "$session" pane list --workspace "$workspace" 2>/dev/null) || continue
+    printf '%s' "$panes" | jq -e --arg tab "$tab" --arg pane "$pane" '
+      (.result.panes | type) == "array"
+      and ([.result.panes[] | select(.tab_id == $tab)] | length == 1 and .[0].pane_id == $pane)
+    ' >/dev/null 2>&1 || continue
+    fm_backend_herdr_tab_is_husk "$session" "$pane" || continue
+    fm_backend_herdr_cli "$session" tab close "$tab" >/dev/null 2>&1 || \
+      echo "warning: could not close agent-free herdr husk tab $tab for '$task_label' in workspace $workspace" >&2
+  done <<EOF
+${FM_BACKEND_HERDR_WORKER_HUSKS:-}
+EOF
+  FM_BACKEND_HERDR_WORKER_HUSKS=
 }
 
 # fm_backend_herdr_cli: run `herdr <args...>` scoped to <session>, setting
@@ -2003,7 +2046,7 @@ fm_backend_herdr_workspace_prune_seeded_default_tab() {  # <session> <workspace_
 #   launcher-home - supervisor/legacy callers inherit their exact launcher
 #                   workspace, or use the unique home label without ancestry.
 #   worker-home   - validates the same launcher identity but selects a separate
-#                   workers-<home-label> container, never the parent's workspace.
+#                   role-neutral worker container, never the parent's workspace.
 #   other-home    - a --secondmate launch stands up that different home's own
 #                   supervisor workspace and deliberately ignores the launcher.
 # A label lookup must resolve exactly one workspace or create a fresh one;

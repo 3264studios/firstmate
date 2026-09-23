@@ -19,12 +19,12 @@
 #
 # Covers, at minimum (per the task brief):
 #   - a primary-shaped home (no .fm-secondmate-home marker) spawning a
-#     crewmate into the "workers-firstmate" workspace
+#     crewmate into the "workers" workspace
 #   - a secondmate-shaped home (with .fm-secondmate-home) getting its own
 #     labeled workspace when the PRIMARY spawns it (fm-spawn.sh's FM_HOME
 #     shadow for --secondmate)
 #   - a crewmate spawned FROM that secondmate-shaped home (the secondmate
-#     running its OWN fm-spawn.sh) landing in the separate workers-2ndmate-<id> workspace -
+#     running its OWN fm-spawn.sh) landing in the separate workers-<id> workspace -
 #     this exact path has never run before this test
 #   - teardown closing the right tab (and no other)
 #   - list-live recovery seeing only its own home's tabs, for both homes
@@ -159,8 +159,8 @@ assert_contains_local "$CM1_CAPTURE" "primary-crew-ok" "cm1's raw launch command
 CM1_WSID=$(herdr pane get "$CM1_PANE" --session "$SESSION" 2>/dev/null | jq -r '.result.pane.workspace_id // empty')
 [ -n "$CM1_WSID" ] || fail "could not read cm1's pane workspace_id"
 CM1_WS_LABEL=$(herdr workspace list --session "$SESSION" 2>&1 | jq -r --arg id "$CM1_WSID" '.result.workspaces[]? | select(.workspace_id == $id) | .label')
-[ "$CM1_WS_LABEL" = "workers-firstmate" ] || fail "a primary-shaped home's crewmate should land in the 'workers-firstmate' workspace, got '$CM1_WS_LABEL'"
-pass "real herdr E2E: the primary-shaped home's crewmate landed in the 'workers-firstmate' workspace"
+[ "$CM1_WS_LABEL" = "workers" ] || fail "a primary-shaped home's crewmate should land in the 'workers' workspace, got '$CM1_WS_LABEL'"
+pass "real herdr E2E: the primary-shaped home's crewmate landed in the 'workers' workspace"
 
 # --- 2. the PRIMARY spawns a secondmate: its tab lands in the SECONDMATE's own space ---
 # (fm-spawn.sh's herdr case arm shadows FM_HOME to the secondmate's home for
@@ -213,7 +213,7 @@ assert_contains_local "$CM2_CAPTURE" "sm-crew-ok" "cm2's raw launch command did 
 
 CM2_WSID=$(herdr pane get "$CM2_PANE" --session "$SESSION" 2>/dev/null | jq -r '.result.pane.workspace_id // empty')
 [ "$CM2_WSID" != "$SM_WSID" ] || fail "a worker must not join its secondmate supervisor workspace"
-[ "$(herdr workspace get "$CM2_WSID" --session "$SESSION" | jq -r .result.workspace.label)" = workers-2ndmate-e2esm1 ] \
+[ "$(herdr workspace get "$CM2_WSID" --session "$SESSION" | jq -r .result.workspace.label)" = workers-e2esm1 ] \
   || fail "a secondmate worker must use its own home's separate worker container"
 [ "$CM2_WSID" != "$CM1_WSID" ] || fail "a crewmate spawned FROM the secondmate home must NOT land in the primary's workspace"
 pass "real herdr E2E: a crewmate spawned FROM the secondmate-shaped home lands in its home's separate worker container"

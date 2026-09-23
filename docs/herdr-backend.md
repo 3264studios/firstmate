@@ -49,8 +49,9 @@ The primary supervisor's home workspace label is `firstmate`.
 A secondmate supervisor's home workspace label is `2ndmate-<secondmate-id>`, derived from its validated `.fm-secondmate-home` marker.
 A secondmate launched by the primary receives a narrowly scoped home override during container creation.
 Workers use their own presentation spaces by default, as described below.
-When projection is disabled or cannot safely proceed, workers use a separate flat container labeled `workers-firstmate` or `workers-2ndmate-<secondmate-id>`.
+When projection is disabled or cannot safely proceed, workers use a separate flat container labeled `workers` or `workers-<secondmate-id>`.
 Each worker remains a task tab there; new workers never become tabs inside the supervisor's home workspace.
+A same-task husk left in the supervisor's workspace or the worker container by an earlier layout is closed only after its replacement exists, and only while it is still a dead or no-agent husk sharing its workspace with another tab.
 
 Attach to the selected named Herdr session and switch to the worker's workspace to watch it.
 Routine supervision uses `bin/fm-peek.sh <id>` and `FM_HOME=<home> bin/fm-send.sh <id> '<text>'` without attaching.
