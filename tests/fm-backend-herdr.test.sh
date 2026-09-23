@@ -996,6 +996,51 @@ test_launcher_identity_refuses_a_workspace_missing_from_the_session() {
 
 # --- workspace_ensure placement ---------------------------------------------
 
+test_worker_fallback_uses_a_separate_container() {
+  local dir log resp fb out
+  dir="$TMP_ROOT/worker-fallback"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"firstmate"},{"workspace_id":"w2","label":"workers-firstmate"}]}}\n' > "$resp/1.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_workspace_ensure fmtest /tmp worker-home' "$ROOT")
+  [ "$out" = w2 ] || fail "worker fallback must use the worker container, not the supervisor workspace: $out"
+  assert_not_contains "$(cat "$log")" $'\x1fworkspace\x1fcreate' "worker fallback duplicated its existing container"
+  pass "Herdr worker fallback remains separate from its supervisor's workspace"
+}
+
+test_worker_container_preflight_refuses_legacy_and_fallback_duplicates() {
+  local dir log resp fb out status container verdict
+  for container in firstmate workers-firstmate; do
+    for verdict in husk live unknown malformed split; do
+      dir="$TMP_ROOT/worker-preflight-$container-$verdict"
+      mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+      printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"%s"}]}}\n' "$container" > "$resp/1.out"
+      printf '{"result":{"tabs":[{"tab_id":"w1:t1","label":"fm-task"}]}}\n' > "$resp/2.out"
+      printf '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"}]}}\n' > "$resp/3.out"
+      printf '{"result":{"pane":{"pane_id":"w1:p1"}}}\n' > "$resp/4.out"
+      case "$verdict" in
+        husk) printf '{"error":{"code":"agent_not_found"}}\n' > "$resp/5.out" ;;
+        live) printf '{"result":{"agent":{"agent_status":"idle"}}}\n' > "$resp/5.out" ;;
+        unknown) printf '1\n' > "$resp/4.exit" ;;
+        malformed) printf '{"result":{}}\n' > "$resp/2.out" ;;
+        split) printf '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"},{"pane_id":"w1:p2","tab_id":"w1:t1"}]}}\n' > "$resp/3.out" ;;
+      esac
+      fb=$(make_herdr_fakebin "$dir")
+      out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+        bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_worker_container_preflight fmtest fm-task' "$ROOT" 2>&1)
+      status=$?
+      if [ "$verdict" = husk ]; then
+        expect_code 0 "$status" "an agent-free $container candidate must not authorize adoption or prevent safe placement: $out"
+      else
+        [ "$status" -ne 0 ] || fail "$container $verdict candidate allowed a duplicate worker"
+      fi
+      assert_not_contains "$(cat "$log")" $'\x1fcreate' "preflight created an endpoint"
+      assert_not_contains "$(cat "$log")" $'\x1fclose' "preflight closed a candidate selected by label"
+    done
+  done
+  pass "Herdr worker preflight preserves legacy and fallback duplicate refusal without adopting or closing label matches"
+}
+
 test_workspace_ensure_prefers_the_launcher_over_the_first_label_match() {
   local dir log resp fb out
   dir="$TMP_ROOT/ensure-launcher"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
@@ -3528,6 +3573,54 @@ test_projection_recovery_is_read_only_and_refuses_live_duplicate_risk() {
   pass "herdr presentation recovery: duplicate-token inspection is read-only and live-agent risk refuses fallback"
 }
 
+test_projection_recovery_reports_only_proven_missing_tokens() {
+  local dir state log resp fb journal out
+  dir="$TMP_ROOT/projection-missing-token"; state="$dir/state"
+  mkdir -p "$dir/responses" "$state"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_journal_create "$1" missing' "$ROOT" "$state" >/dev/null
+  journal="$state/missing.herdr-presentation"
+  printf '{"result":{"workspaces":[]}}\n' > "$resp/1.out"
+  printf '{"result":{}}\n' > "$resp/2.out"
+  printf '{"result":{"workspaces":[{}]}}\n' > "$resp/3.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '
+      . "$0/bin/backends/herdr.sh"
+      fm_backend_herdr_projection_recovery_allows_flat fmtest "$1" missing || exit 1
+      [ "$FM_BACKEND_HERDR_PROJECTION_RECOVERY_MATCHES" = 0 ] || exit 2
+      fm_backend_herdr_projection_recovery_allows_flat fmtest "$1" missing && exit 3
+      [ -z "$FM_BACKEND_HERDR_PROJECTION_RECOVERY_MATCHES" ] || exit 4
+      fm_backend_herdr_projection_recovery_allows_flat fmtest "$1" missing && exit 5
+      [ -z "$FM_BACKEND_HERDR_PROJECTION_RECOVERY_MATCHES" ] || exit 6
+    ' "$ROOT" "$journal" 2>&1) || fail "missing-token proof survived an unreadable snapshot: $out"
+  [ -f "$journal" ] || fail "read-only missing-token proof removed the journal"
+  pass "Herdr recovery exposes zero matches only for a successful snapshot and clears stale proof on failure"
+}
+
+test_missing_projection_retains_foreign_binding() {
+  local dir resp log fb out scope
+  for scope in home session; do
+    dir="$TMP_ROOT/missing-foreign-$scope"; resp="$dir/responses"; log="$dir/log"
+    mkdir -p "$resp" "$dir/home" "$dir/foreign" "$dir/state"; : > "$log"
+    printf '{"result":{"workspaces":[]}}\n' > "$resp/1.out"
+    fb=$(make_herdr_fakebin "$dir")
+    out=$(PATH="$fb:$PATH" FM_HOME="$dir/home" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+      bash -c '
+        . "$0/bin/backends/herdr.sh"
+        token=$(fm_backend_herdr_projection_journal_create "$1/state" missing) || exit 1
+        journal="$1/state/missing.herdr-presentation"
+        home="$1/home"; session=fmtest
+        if [ "$2" = home ]; then home="$1/foreign"; else session=another; fi
+        fm_backend_herdr_projection_journal_bind "$journal" missing "$home" "$session" w1 t1 p1 parent firstmate "$(fm_backend_herdr_projection_workspace_label missing "$token")" fm-missing || exit 2
+        before=$(cat "$journal")
+        fm_backend_herdr_projection_recovery_allows_flat fmtest "$journal" missing || exit 3
+        [ -z "$FM_BACKEND_HERDR_PROJECTION_RECOVERY_MATCHES" ] || exit 4
+        [ "$(cat "$journal")" = "$before" ] || exit 5
+      ' "$ROOT" "$dir" "$scope" 2>&1) || fail "missing-token inspection authorized replacing a foreign $scope binding: $out"
+  done
+  pass "Herdr missing-token inspection retains journals bound to another home or session"
+}
+
 # --- workspace_find: scoped to THIS home's own label, not just any match ----
 
 test_workspace_find_matches_only_this_homes_own_label() {
@@ -3567,6 +3660,23 @@ test_list_live_scoped_to_this_homes_workspace_only() {
   assert_not_contains "$(cat "$log")" $'\x1f''tab'$'\x1f''list'$'\x1f''--workspace'$'\x1f''w1' \
     "list_live must never query the primary's (or a sibling secondmate's) workspace"
   pass "fm_backend_herdr_list_live: scoped to this home's own workspace, never a sibling home's"
+}
+
+test_list_live_includes_worker_and_legacy_containers() {
+  local dir log resp fb out home
+  dir="$TMP_ROOT/list-live-workers"; mkdir -p "$dir/responses"; log="$dir/log"; resp="$dir/responses"; : > "$log"
+  home="$dir/home"; mkdir -p "$home"; printf 'bravo\n' > "$home/.fm-secondmate-home"
+  printf '{"result":{"workspaces":[{"workspace_id":"w1","label":"2ndmate-bravo"},{"workspace_id":"w2","label":"workers-2ndmate-bravo"},{"workspace_id":"w3","label":"workers-firstmate"}]}}\n' > "$resp/1.out"
+  printf '{"result":{"tabs":[{"tab_id":"w1:t1","label":"fm-legacy"}]}}\n' > "$resp/2.out"
+  printf '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"}]}}\n' > "$resp/3.out"
+  printf '{"result":{"tabs":[{"tab_id":"w2:t1","label":"fm-new"}]}}\n' > "$resp/4.out"
+  printf '{"result":{"panes":[{"pane_id":"w2:p1","tab_id":"w2:t1"}]}}\n' > "$resp/5.out"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_list_live fmtest' "$ROOT")
+  [ "$out" = $'fmtest:w1:p1\tfm-legacy\nfmtest:w2:p1\tfm-new' ] || fail "discovery stranded a legacy or new worker: $out"
+  assert_not_contains "$(cat "$log")" $'--workspace\x1fw3' "discovery crossed into another home's workers"
+  pass "Herdr discovery includes both recorded legacy placement and the separate worker container within one home"
 }
 
 # --- target parsing, key normalization ---------------------------------------
@@ -5241,6 +5351,8 @@ test_launcher_identity_refuses_a_pane_from_another_server_socket
 test_launcher_identity_refuses_an_unreadable_pane
 test_launcher_identity_refuses_a_pane_and_tab_that_disagree
 test_launcher_identity_refuses_a_workspace_missing_from_the_session
+test_worker_fallback_uses_a_separate_container
+test_worker_container_preflight_refuses_legacy_and_fallback_duplicates
 test_workspace_ensure_prefers_the_launcher_over_the_first_label_match
 test_workspace_ensure_refuses_an_ambiguous_label_with_no_launcher
 test_workspace_ensure_other_home_ignores_the_launcher_identity
@@ -5329,8 +5441,11 @@ test_projection_order_rejects_malformed_socket
 test_projection_reclaim_refusal_matrix_is_non_mutating
 test_projection_reclaim_replaces_only_exact_husk_and_advances_binding
 test_projection_recovery_is_read_only_and_refuses_live_duplicate_risk
+test_projection_recovery_reports_only_proven_missing_tokens
+test_missing_projection_retains_foreign_binding
 test_workspace_find_matches_only_this_homes_own_label
 test_list_live_scoped_to_this_homes_workspace_only
+test_list_live_includes_worker_and_legacy_containers
 test_parse_target
 test_normalize_key
 test_capture_calls_pane_read
