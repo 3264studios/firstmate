@@ -230,8 +230,8 @@ function lockOwnership(): LockOwnership {
     return "missing";
   }
   if (!/^[0-9]+$/.test(lockPid) || lockPid === "1") return "other";
-  // The Pi engine is the session owner. Shell startup resolves a direct
-  // native Codex transport to this same PID in fm-session-lock-lib.sh.
+  // The Pi engine is the session owner. Shell startup resolves the exact
+  // native Codex transport shapes to this same PID in fm-session-lock-lib.sh.
   // A launcher or another enclosing session is not this Pi session.
   if (lockPid === String(process.pid)) return "owned";
   return pidAlive(lockPid) ? "other" : "missing";
