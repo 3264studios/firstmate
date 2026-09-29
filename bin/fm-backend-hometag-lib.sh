@@ -21,6 +21,11 @@
 # FM_HOME/FM_ROOT fallbacks (both adapters already do this for their own
 # purposes before any other function runs).
 #
+# bin/fm-spawn.sh also exports this tag into ship and scout panes as
+# FM_TASK_HOME, beside FM_TASK_ID, so bin/fm-teardown.sh can tell this home's
+# task apart from an equal task id in another home when it stops the browser
+# bridges a task started (its header's Fix 4).
+#
 # Moving/relocating a firstmate installation changes its FM_ROOT path and
 # therefore its tag; titles created under the old tag simply stop matching -
 # an accepted limitation, no worse than the existing fact that a task's

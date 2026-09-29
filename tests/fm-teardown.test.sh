@@ -3738,6 +3738,74 @@ test_leaked_tasktmp_process_is_reaped() {
   pass "a leaked descendant process rooted under the task's per-task tasktmp is reaped by teardown too"
 }
 
+# Launch <script> the way chrome-devtools-axi launches its bridge: a detached
+# (new session) node child with ignored stdio that inherits the caller's
+# environment, here carrying the given task markers. Node rather than a system
+# binary, because macOS hides a platform binary's environment from `ps -E`.
+# Echoes the child pid.
+launch_detached_node() {  # <script> <cwd> <task-id> <home-tag> [arg...]
+  local script=$1 cwd=$2 task_id=$3 home_tag=$4
+  shift 4
+  FM_TASK_ID=$task_id FM_TASK_HOME=$home_tag node -e '
+    const [script, cwd, ...rest] = process.argv.slice(1);
+    const child = require("child_process").spawn(process.execPath, [script, ...rest],
+      { detached: true, stdio: "ignore", cwd, env: process.env });
+    child.unref();
+    console.log(child.pid);' "$script" "$cwd" "$@"
+}
+
+test_task_browser_bridge_outside_roots_is_stopped() {
+  local case_dir rc outside bridge daemon tag own other_task other_home marked_daemon p
+  command -v node >/dev/null 2>&1 || fail "browser-bridge-outside-roots: test needs node"
+  case_dir=$(make_case browser-bridge-outside-roots)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  # A worker that ran `cd "$TMPDIR/x" && chrome-devtools-axi open ...` leaves a
+  # bridge whose working directory is outside both of Fix 2's roots.
+  outside="$case_dir/outside-tmp"
+  mkdir -p "$outside" "$case_dir/fake"
+  bridge="$case_dir/fake/chrome-devtools-axi-bridge.js"
+  daemon="$case_dir/fake/shared-daemon.js"
+  printf '%s\n' 'setTimeout(() => {}, 300000);' > "$bridge"
+  cp "$bridge" "$daemon"
+  tag=$(FM_ROOT="$ROOT" FM_HOME="${FM_HOME:-$ROOT}" bash -c \
+    '. "$FM_ROOT/bin/fm-backend-hometag-lib.sh" && fm_backend_hometag')
+  [ -n "$tag" ] || fail "browser-bridge-outside-roots: could not derive this home's tag"
+
+  own=$(launch_detached_node "$bridge" "$outside" task-x1 "$tag")
+  other_task=$(launch_detached_node "$bridge" "$outside" task-other "$tag")
+  other_home=$(launch_detached_node "$bridge" "$outside" task-x1 "$tag-other-home")
+  # A shared daemon the worker happened to start carries the same markers, and
+  # its command line quotes the bridge path in a later argument; it is not a
+  # bridge and must survive.
+  marked_daemon=$(launch_detached_node "$daemon" "$outside" task-x1 "$tag" "$bridge")
+  sleep 0.5
+  for p in "$own" "$other_task" "$other_home" "$marked_daemon"; do
+    case "$p" in ''|*[!0-9]*) fail "browser-bridge-outside-roots: a fixture process did not report its pid" ;; esac
+    kill -0 "$p" 2>/dev/null || fail "browser-bridge-outside-roots: fixture process $p did not start"
+  done
+
+  rc=0
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  for p in "$other_task" "$other_home" "$marked_daemon"; do
+    if kill -0 "$p" 2>/dev/null; then
+      kill -KILL "$p" 2>/dev/null || true
+    else
+      kill -KILL "$own" 2>/dev/null || true
+      fail "browser-bridge-outside-roots: teardown stopped process $p, which is not this task's bridge"
+    fi
+  done
+  if kill -0 "$own" 2>/dev/null; then
+    kill -KILL "$own" 2>/dev/null || true
+    fail "browser-bridge-outside-roots: the task's own browser bridge outside its roots survived teardown"
+  fi
+  expect_code 0 "$rc" "browser-bridge-outside-roots: teardown should still succeed"
+  assert_grep "stopping browser bridge(s) started by task-x1: $own" "$case_dir/stderr" \
+    "browser-bridge-outside-roots: teardown did not report stopping the task's bridge"
+  pass "a task's browser bridge started outside its roots is stopped by its task markers; other tasks, other homes, and non-bridge processes are untouched"
+}
+
 test_lsof_absent_reaps_tmux_process_group() {
   local case_dir rc pid path_without_lsof
   case_dir=$(make_case lsof-absent-process-group-reap)
@@ -4338,6 +4406,7 @@ test_another_branchs_parked_run_is_never_touched
 test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
 test_leaked_tasktmp_process_is_reaped
+test_task_browser_bridge_outside_roots_is_stopped
 test_lsof_absent_reaps_tmux_process_group
 test_lsof_error_refuses_before_removal
 test_reused_pid_identity_is_not_force_killed
