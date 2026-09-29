@@ -1383,7 +1383,7 @@ SH
 }
 
 # A ship worker's environment must carry both task markers, FM_TASK_ID and this
-# home's FM_TASK_HOME tag, because bin/fm-teardown.sh attributes a browser
+# home's FM_TASK_HOME marker, because bin/fm-teardown.sh attributes a browser
 # bridge the task started by exactly that pair; an empty allowlist is where the
 # launch floor either holds them or loses them. The pane exports the fake pane
 # received are replayed before the emitted launch, as the real pane shell runs
@@ -1407,8 +1407,8 @@ SH
     unset FM_TEST_PANE_LOG
     expect_code 0 "$status" "allowlist=$setting spawn should succeed: $out"
     tag=$(FM_HOME="$HOME_DIR" FM_ROOT="$ROOT" bash -c \
-      '. "$FM_ROOT/bin/fm-backend-hometag-lib.sh" && fm_backend_hometag')
-    [ -n "$tag" ] || fail "allowlist=$setting: could not derive the test home's tag"
+      '. "$FM_ROOT/bin/fm-backend-hometag-lib.sh" && fm_task_home_marker')
+    [ -n "$tag" ] || fail "allowlist=$setting: could not derive the test home's marker"
     preamble=$(grep '^export ' "$CASE_DIR/pane.log")
     launch=$(cat "$LAUNCH_LOG")
     result=$(env -i HOME="$HOME_DIR/user-home" PATH=/usr/bin:/bin TERM=xterm \

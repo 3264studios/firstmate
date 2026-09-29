@@ -241,10 +241,10 @@
 #   the same channel as GOTMPDIR, and bin/fm-test-run.sh refuses to execute the
 #   behavior suite from the repository primary checkout while that marker is
 #   set (its header owns the refusal). The same pane also receives
-#   `export FM_TASK_HOME=<home tag>` from bin/fm-backend-hometag-lib.sh, so the
-#   pair names one task in one home; bin/fm-teardown.sh's Fix 4 stops the
-#   browser bridges that carry both. A secondmate runs in its own home and is
-#   not marked.
+#   `export FM_TASK_HOME=<home marker>` from bin/fm-backend-hometag-lib.sh's
+#   fm_task_home_marker, so the pair names one task in one home;
+#   bin/fm-teardown.sh's Fix 4 stops the browser bridges that carry both. A
+#   secondmate runs in its own home and is not marked.
 #   Only after this isolation check, every fresh ship or scout requires a clean
 #   task worktree. When an origin configuration is detected, spawn fetches it,
 #   resolves the current remote default branch, and resets to its tip. When none
@@ -5226,13 +5226,14 @@ fi
 # Mark the pane as a task worker so bin/fm-test-run.sh can refuse to run the
 # suite in the repository's primary checkout, and so bin/fm-teardown.sh can
 # attribute a browser bridge the task started wherever it was launched from.
-# FM_TASK_HOME carries this home's tag, because equal task ids can exist in
-# different homes. Ship and scout workers are the ones assigned an isolated
-# worktree; a secondmate runs its own home instead. The id reached a validated
-# bare-slug charset above, so it carries no shell syntax of its own.
+# FM_TASK_HOME carries this home's marker, because equal task ids can exist in
+# different homes, including homes that share one code root. Ship and scout
+# workers are the ones assigned an isolated worktree; a secondmate runs its own
+# home instead. The id reached a validated bare-slug charset above, so it
+# carries no shell syntax of its own.
 if [ "$KIND" = ship ] || [ "$KIND" = scout ]; then
   spawn_send_text_line "$T" "export FM_TASK_ID=$ID"
-  spawn_send_text_line "$T" "export FM_TASK_HOME=$(shell_quote "$(fm_backend_hometag)")"
+  spawn_send_text_line "$T" "export FM_TASK_HOME=$(shell_quote "$(fm_task_home_marker)")"
 fi
 # Send through the exact channel that already ships GOTMPDIR, so every backend
 # and harness - ship, scout, and secondmate - gets it before launch. Skipped

@@ -296,23 +296,25 @@
 #     Fix 2 misses it and its chrome-devtools-mcp server and headless Chrome
 #     stay alive. The bridge does inherit the worker's environment, where
 #     bin/fm-spawn.sh exported FM_TASK_ID and FM_TASK_HOME (this home's
-#     bin/fm-backend-hometag-lib.sh tag, because task ids repeat across
-#     homes). reap_task_browser_bridges selects only a process whose script
-#     argument (argv[1]) is chrome-devtools-axi-bridge.js AND whose
-#     environment carries both exact markers and a non-default
-#     CHROME_DEVTOOLS_AXI_SESSION, sends it TERM - its own handler
-#     closes the MCP server, which closes Chrome - and sends KILL to its own
-#     process group only when the same identity survives the grace period;
-#     Chrome also exits when that server dies, because its debugging pipe
-#     closes. Attribution is scoped to the bridge on purpose: a shared daemon a
-#     worker happens to start lazily inherits the same markers and must never
-#     be stopped by one task's cleanup. The same holds for the default-session
-#     bridge (CHROME_DEVTOOLS_AXI_SESSION unset, empty, or "default"):
-#     chrome-devtools-axi keys a bridge only by session name, so another worker
-#     or the captain may be driving the one this task started, and it is never
-#     stopped. At most one default-session bridge can therefore linger after
-#     cleanup. Best effort: an unreadable environment or a failed signal is
-#     skipped with no refusal.
+#     bin/fm-backend-hometag-lib.sh fm_task_home_marker, because task ids
+#     repeat across homes, including homes that share one code root).
+#     reap_task_browser_bridges selects only a process whose script argument
+#     (argv[1]) is chrome-devtools-axi-bridge.js AND whose environment carries
+#     both exact markers and a non-default CHROME_DEVTOOLS_AXI_SESSION, sends
+#     it TERM - its own handler closes the MCP server, which closes Chrome -
+#     and sends KILL to its own process group only when the same identity
+#     survives the grace period; Chrome also exits when that server dies,
+#     because its debugging pipe closes. Attribution is scoped to the bridge on
+#     purpose: a shared daemon a worker happens to start lazily inherits the
+#     same markers and must never be stopped by one task's cleanup. The same
+#     holds for the default-session bridge (CHROME_DEVTOOLS_AXI_SESSION unset,
+#     empty, or "default"): chrome-devtools-axi keys a bridge only by session
+#     name, so another worker or the captain may be driving the one this task
+#     started, and it is never stopped. At most one default-session bridge can
+#     therefore linger after cleanup. A named session is attributed to the task
+#     whose worker started its bridge; another worker that reuses the same name
+#     loses that browser when the starting task is cleaned up. Best effort: an
+#     unreadable environment or a failed signal is skipped with no refusal.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -2202,13 +2204,13 @@ reap_task_backend_process_group() {  # <label>
 # spaces, so a bridge installed under a path containing a space is not
 # attributed; `ps -E` shows a same-user non-platform binary's environment, such
 # as the node bridge's.
-task_browser_bridge_matches() {  # <pid> <task-id> <home-tag>
+task_browser_bridge_matches() {  # <pid> <task-id> <home-marker>
   local pid=$1 script env_words session
   if [ -d "/proc/$pid" ]; then
     script=$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | sed -n 2p) || return 1
     env_words=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null) || return 1
   else
-    script=$(LC_ALL=C ps -o args= -p "$pid" 2>/dev/null | awk '{ print $2 }') || return 1
+    script=$(LC_ALL=C ps -ww -o args= -p "$pid" 2>/dev/null | awk '{ print $2 }') || return 1
     env_words=$(ps -E -ww -o args= -p "$pid" 2>/dev/null | tr ' ' '\n') || return 1
   fi
   case "$script" in
@@ -2221,9 +2223,9 @@ task_browser_bridge_matches() {  # <pid> <task-id> <home-tag>
   printf '%s\n' "$env_words" | grep -Fxq -- "FM_TASK_HOME=$3"
 }
 
-task_browser_bridge_pids() {  # <task-id> <home-tag>
+task_browser_bridge_pids() {  # <task-id> <home-marker>
   local pid
-  ps -A -o pid= -o args= 2>/dev/null |
+  ps -A -ww -o pid= -o args= 2>/dev/null |
     awk '/chrome-devtools-axi-bridge\.js/ { print $1 }' |
     while IFS= read -r pid; do
       case "$pid" in ''|*[!0-9]*) continue ;; esac
@@ -2239,7 +2241,7 @@ task_browser_bridge_pids() {  # <task-id> <home-tag>
 # leaves teardown's own required-source refusals unchanged.
 reap_task_browser_bridges() {
   local tag pids pid identity
-  if ! declare -F fm_backend_hometag >/dev/null 2>&1; then
+  if ! declare -F fm_task_home_marker >/dev/null 2>&1; then
     if [ ! -f "$SCRIPT_DIR/fm-backend-hometag-lib.sh" ] || [ ! -r "$SCRIPT_DIR/fm-backend-hometag-lib.sh" ]; then
       echo "warning: fm-backend-hometag-lib.sh is missing or unreadable; browser bridges started by $ID were not stopped" >&2
       return 0
@@ -2247,7 +2249,7 @@ reap_task_browser_bridges() {
     # shellcheck source=bin/fm-backend-hometag-lib.sh
     . "$SCRIPT_DIR/fm-backend-hometag-lib.sh"
   fi
-  tag=$(fm_backend_hometag) || return 0
+  tag=$(fm_task_home_marker) || return 0
   pids=$(task_browser_bridge_pids "$ID" "$tag")
   [ -n "$pids" ] || return 0
   echo "teardown: stopping browser bridge(s) started by $ID: $(printf '%s' "$pids" | tr '\n' ' ')" >&2
