@@ -298,15 +298,21 @@
 #     bin/fm-spawn.sh exported FM_TASK_ID and FM_TASK_HOME (this home's
 #     bin/fm-backend-hometag-lib.sh tag, because task ids repeat across
 #     homes). reap_task_browser_bridges selects only a process whose script
-#     argument (argv[1]) is chrome-devtools-axi-bridge.js (or .ts) AND whose
-#     environment carries both exact markers, sends it TERM - its own handler
+#     argument (argv[1]) is chrome-devtools-axi-bridge.js AND whose
+#     environment carries both exact markers and a non-default
+#     CHROME_DEVTOOLS_AXI_SESSION, sends it TERM - its own handler
 #     closes the MCP server, which closes Chrome - and sends KILL to its own
 #     process group only when the same identity survives the grace period;
 #     Chrome also exits when that server dies, because its debugging pipe
 #     closes. Attribution is scoped to the bridge on purpose: a shared daemon a
 #     worker happens to start lazily inherits the same markers and must never
-#     be stopped by one task's cleanup. Best effort: an unreadable environment
-#     or a failed signal is skipped with no refusal.
+#     be stopped by one task's cleanup. The same holds for the default-session
+#     bridge (CHROME_DEVTOOLS_AXI_SESSION unset, empty, or "default"):
+#     chrome-devtools-axi keys a bridge only by session name, so another worker
+#     or the captain may be driving the one this task started, and it is never
+#     stopped. At most one default-session bridge can therefore linger after
+#     cleanup. Best effort: an unreadable environment or a failed signal is
+#     skipped with no refusal.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -2190,13 +2196,14 @@ reap_task_backend_process_group() {  # <label>
 # started by this task in this home. The script argument (argv[1], right after
 # the interpreter) must be the bridge itself - a name quoted anywhere else in a
 # command line, such as a worker's own argv, never qualifies - and the
-# environment must carry both exact markers. Linux reads the NUL-separated
+# environment must carry both exact markers and a non-default session name,
+# because a default-session bridge may be shared. Linux reads the NUL-separated
 # /proc/<pid>/cmdline and environ. macOS reads `ps`, whose words split on
 # spaces, so a bridge installed under a path containing a space is not
 # attributed; `ps -E` shows a same-user non-platform binary's environment, such
 # as the node bridge's.
 task_browser_bridge_matches() {  # <pid> <task-id> <home-tag>
-  local pid=$1 script env_words
+  local pid=$1 script env_words session
   if [ -d "/proc/$pid" ]; then
     script=$(tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | sed -n 2p) || return 1
     env_words=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null) || return 1
@@ -2205,9 +2212,11 @@ task_browser_bridge_matches() {  # <pid> <task-id> <home-tag>
     env_words=$(ps -E -ww -o args= -p "$pid" 2>/dev/null | tr ' ' '\n') || return 1
   fi
   case "$script" in
-    */chrome-devtools-axi-bridge.js|*/chrome-devtools-axi-bridge.ts) ;;
+    */chrome-devtools-axi-bridge.js) ;;
     *) return 1 ;;
   esac
+  session=$(printf '%s\n' "$env_words" | sed -n 's/^CHROME_DEVTOOLS_AXI_SESSION=//p' | tail -n 1)
+  case "$session" in ''|default) return 1 ;; esac
   printf '%s\n' "$env_words" | grep -Fxq -- "FM_TASK_ID=$2" || return 1
   printf '%s\n' "$env_words" | grep -Fxq -- "FM_TASK_HOME=$3"
 }
@@ -2215,7 +2224,7 @@ task_browser_bridge_matches() {  # <pid> <task-id> <home-tag>
 task_browser_bridge_pids() {  # <task-id> <home-tag>
   local pid
   ps -A -o pid= -o args= 2>/dev/null |
-    awk '/chrome-devtools-axi-bridge\.(js|ts)/ { print $1 }' |
+    awk '/chrome-devtools-axi-bridge\.js/ { print $1 }' |
     while IFS= read -r pid; do
       case "$pid" in ''|*[!0-9]*) continue ;; esac
       [ "$pid" != "$$" ] || continue
