@@ -2322,7 +2322,7 @@ The merge suite and the security suite dominate the wall time.
 
 ## Native Codex through Pi
 
-Verified on 2026-09-09 with Pi 0.85.1, the ChatGPT.app Codex binary 0.153.4, the npm `@openai/codex` launcher 0.151.0, and the installed `pi-codex-native` 0.2.1 adapter.
+Verified on 2026-09-30 with Pi 0.87.1, the ChatGPT.app bundled Codex 0.159.0 at `Contents/Resources/codex-cli/bin/codex`, the npm `@openai/codex` launcher 0.151.0, and the installed `pi-codex-native` 0.2.1 adapter.
 Run this token-free guard after updating Pi, Codex, or the adapter:
 
 ```sh
