@@ -9,27 +9,41 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
-# Mirror the adapter's own executable resolution: the ChatGPT.app binary when
-# installed, else PATH codex. When PATH codex is the installed npm launcher and
-# is not already the probe executable, the ownership probe runs through it too.
-FM_NATIVE_GUI_CODEX=/Applications/ChatGPT.app/Contents/Resources/codex
+# Mirror the adapter's own executable resolution: the ChatGPT.app bundled Codex
+# (current codex-cli/bin layout, then the legacy path) when installed, else PATH
+# codex. When PATH codex is the installed npm launcher and is not already the
+# probe executable, the ownership probe runs through it too.
 if [ -z "${FM_NATIVE_CODEX_BIN:-}" ]; then
-  if [ -x "$FM_NATIVE_GUI_CODEX" ]; then FM_NATIVE_CODEX_BIN=$FM_NATIVE_GUI_CODEX; else FM_NATIVE_CODEX_BIN=codex; fi
+  FM_NATIVE_CODEX_BIN=codex
+  for fm_native_gui_codex in \
+    /Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex \
+    /Applications/ChatGPT.app/Contents/Resources/codex; do
+    if [ -x "$fm_native_gui_codex" ]; then FM_NATIVE_CODEX_BIN=$fm_native_gui_codex; break; fi
+  done
 fi
 export FM_NATIVE_CODEX_BIN
 fm_live_gate default-on FM_PI_CODEX_NATIVE_LIVE node "${FM_PI_BIN:-pi}" "$FM_NATIVE_CODEX_BIN"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$ROOT/bin/fm-session-lock-lib.sh"
+fm_native_npm_launcher() {  # <executable>
+  local resolved
+  resolved=$(command -v "$1" 2>/dev/null) || return 1
+  case "$(fm_cursor_canonical_path "$resolved")" in
+    */@openai/codex/bin/codex.js) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 FM_NATIVE_CODEX_LAUNCHER=$(command -v codex 2>/dev/null || true)
 if [ -n "$FM_NATIVE_CODEX_LAUNCHER" ] && [ "$FM_NATIVE_CODEX_LAUNCHER" != "$(command -v "$FM_NATIVE_CODEX_BIN")" ]; then
-  case "$(fm_cursor_canonical_path "$FM_NATIVE_CODEX_LAUNCHER")" in
-    */@openai/codex/bin/codex.js) ;;
-    *) FM_NATIVE_CODEX_LAUNCHER='' ;;
-  esac
+  fm_native_npm_launcher "$FM_NATIVE_CODEX_LAUNCHER" || FM_NATIVE_CODEX_LAUNCHER=''
 else
   FM_NATIVE_CODEX_LAUNCHER=''
 fi
-export FM_NATIVE_CODEX_LAUNCHER
+FM_NATIVE_CODEX_NPM=''
+if [ -n "$FM_NATIVE_CODEX_LAUNCHER" ] || fm_native_npm_launcher "$FM_NATIVE_CODEX_BIN"; then
+  FM_NATIVE_CODEX_NPM=1
+fi
+export FM_NATIVE_CODEX_LAUNCHER FM_NATIVE_CODEX_NPM
 PI_CODEX_NATIVE_PACKAGE=${PI_CODEX_NATIVE_PACKAGE:-"$HOME/.pi/agent/packages/pi-codex-native"}
 if [ ! -f "$PI_CODEX_NATIVE_PACKAGE/index.ts" ]; then
   if [ "${FM_PI_CODEX_NATIVE_LIVE:-${FM_LIVE:-0}}" = 1 ]; then
@@ -408,7 +422,7 @@ try {
           "actual Pi runtime and native package",
           "full startup through real Codex command/exec and shell ownership",
           "native child replacement preserves Pi owner",
-          ...(process.env.FM_NATIVE_CODEX_LAUNCHER ? ["installed npm Codex launcher resolves to the same Pi owner"] : []),
+          ...(process.env.FM_NATIVE_CODEX_NPM ? ["installed npm Codex launcher resolves to the same Pi owner"] : []),
           "native Ultra preserved across operational turns and restart",
           "installed native adapter emits observable output progress",
           "actual FirstMate primary extensions",
